@@ -11,6 +11,10 @@ That last property is the research requirement. The rest is engineering.
 
 ## Quick start
 
+**On Windows?** Read [docs/06-windows-setup.md](docs/06-windows-setup.md) first —
+the repo must live inside WSL2, not on a Windows drive, or Chaos Mesh cannot
+attach to pods.
+
 **Free, on your own machine** (needs Docker with ≥ 12 GB):
 
 ```bash
@@ -95,6 +99,7 @@ See [docs/03-trust-boundary.md](docs/03-trust-boundary.md).
 | [Trust boundary](docs/03-trust-boundary.md) | **before touching `platform/rbac/`** |
 | [Cost control](docs/04-cost-control.md) | before leaving anything running |
 | [Runbook](docs/05-runbook.md) | day-to-day operation and troubleshooting |
+| [Windows setup](docs/06-windows-setup.md) | **running locally on Windows — read before cloning to a drive** |
 
 ---
 

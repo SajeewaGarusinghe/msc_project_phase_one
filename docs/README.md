@@ -7,6 +7,7 @@
 | [03 — Trust boundary](03-trust-boundary.md) | **before changing anything under `platform/rbac/`** |
 | [04 — Cost control](04-cost-control.md) | before leaving the bench running |
 | [05 — Runbook](05-runbook.md) | day-to-day operation |
+| [06 — Windows setup](06-windows-setup.md) | running locally on Windows — WSL2, Docker Desktop, why not D: |
 
 ## Phase 1 in one paragraph
 
