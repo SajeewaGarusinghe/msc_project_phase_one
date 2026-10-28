@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Local bench -- k3d (k3s in Docker).
+#
+# WHY k3d AND NOT minikube OR kind:
+#   k3d runs the SAME k3s distribution as the cloud node. Identical runtime,
+#   identical containerd socket path, identical default StorageClass
+#   (local-path), identical disabled components. Everything in platform/ then
+#   applies unchanged to either target, so local development cannot drift away
+#   from the environment where incidents are actually captured.
+#
+#   minikube adds a VM layer on macOS/Windows and uses a different runtime
+#   configuration; kind runs upstream Kubernetes, not k3s. Both would mean
+#   maintaining two platform configurations.
+#
+# REQUIREMENTS: Docker with >= 12 GB allocated (>= 20 GB preferred). On macOS
+# and Windows raise the Docker Desktop memory limit first -- the default of
+# 2-4 GB will not start the Astronomy Shop and the failure looks like random
+# pod evictions rather than an obvious out-of-memory error.
+#
+# eBPF NOTE: k3d containers share the HOST kernel, so the eBPF observer planned
+# for Phase 7 works here if the host kernel is modern and BTF-enabled. On
+# macOS/Windows the "host" is Docker Desktop's Linux VM, which may not be.
+# Linux hosts are strongly preferred once Phase 7 starts.
+# ---------------------------------------------------------------------------
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: rca-bench
+
+servers: 1
+agents: 0          # single node, matching the cloud bench exactly
+
+image: docker.io/rancher/k3s:v1.31.5-k3s1
+
+options:
+  k3s:
+    extraArgs:
+      # Same disabled components as the cloud node: nothing here needs an
+      # ingress controller or a LoadBalancer, and both cost memory.
+      - arg: --disable=traefik
+        nodeFilters: [server:*]
+      - arg: --disable=servicelb
+        nodeFilters: [server:*]
+  kubeconfig:
+    updateDefaultKubeconfig: false   # we write ./kubeconfig explicitly
+    switchCurrentContext: false
+
+ports:
+  # Only the k3s API is published. Everything else is reached by port-forward,
+  # exactly as on the cloud bench, so the workflow is identical.
+  - port: 6443:6443
+    nodeFilters: [server:0]
+
+volumes:
+  # Chaos Mesh's chaos-daemon needs the containerd socket to inject faults.
+  # Same path as the cloud node because both run k3s.
+  - volume: /run/k3s/containerd/containerd.sock:/run/k3s/containerd/containerd.sock
+    nodeFilters: [server:0]

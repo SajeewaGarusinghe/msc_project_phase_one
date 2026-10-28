@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# GROUND TRUTH:   cartservice pod is killed, forcing a restart
+# INTENDED VICTIM: checkoutservice error rate (louder than the cart's own)
+#
+# Tests whether the agent follows an error chain to its origin or stops at the
+# service producing the most errors. This is the "symptom-as-cause" failure
+# mode reported at 39.9% in the 2026 RCA-failure literature -- measured here
+# with no adversary present, as the clean-arm baseline.
+# ---------------------------------------------------------------------------
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-cart
+  namespace: chaos-mesh
+  annotations:
+    bench.msc/root-cause: "cartservice"
+    bench.msc/intended-victim: "checkoutservice"
+    bench.msc/fault-class: "availability"
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [app]
+    labelSelectors:
+      app.kubernetes.io/component: cartservice
+  # pod-kill is instantaneous; the scheduler decides how long recovery takes.
+  gracePeriod: 0

@@ -1,0 +1,111 @@
+# ---------------------------------------------------------------------------
+# OpenTelemetry Collector -- gateway mode.
+#
+# This is the single ingress point for all application telemetry and, later,
+# the natural place to install the provenance verifier as a processor. Running
+# it as a Deployment (not a DaemonSet) on a single-node bench keeps one copy.
+#
+# The k8sattributes processor is the piece that matters for this project: it
+# resolves the sending pod's IP to real Kubernetes metadata and sets the
+# resource attributes from what the CLUSTER knows, rather than trusting what
+# the workload claims about itself. That is a weak form of the authorship check
+# the P7 verifier generalises -- see docs/04-why-this-shape.md.
+# ---------------------------------------------------------------------------
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+resources:
+  limits:   { cpu: 1000m, memory: 1Gi }
+  requests: { cpu: 200m,  memory: 512Mi }
+
+# The collector needs to read pods to attribute telemetry to them.
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "namespaces", "nodes"]
+      verbs: ["get", "watch", "list"]
+    - apiGroups: ["apps"]
+      resources: ["replicasets"]
+      verbs: ["get", "watch", "list"]
+
+presets:
+  kubernetesAttributes:
+    enabled: true
+  logsCollection:
+    enabled: false   # app logs arrive over OTLP, not by tailing files
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  processors:
+    # Bounded memory: on a 16 GB node an unbounded collector is the first thing
+    # to OOM under a chaos-induced error storm, which loses exactly the
+    # telemetry the incident was meant to produce.
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 75
+      spike_limit_percentage: 15
+
+    batch:
+      timeout: 5s
+      send_batch_size: 1024
+
+    # Overwrite self-reported identity with cluster-derived identity.
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.deployment.name
+          - k8s.node.name
+      pod_association:
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.ip
+        - sources:
+            - from: connection
+
+  exporters:
+    otlp/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls: { insecure: true }
+
+    otlphttp/loki:
+      endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+      tls: { insecure: true }
+
+    prometheusremotewrite:
+      endpoint: http://prometheus-server.observability.svc.cluster.local/api/v1/write
+      tls: { insecure: true }
+      # Keep resource attributes as labels so a series can be attributed to the
+      # pod that produced it. Without this the metric loses its author.
+      resource_to_telemetry_conversion:
+        enabled: true
+
+  service:
+    pipelines:
+      traces:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters:  [otlp/tempo]
+      metrics:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters:  [prometheusremotewrite]
+      logs:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters:  [otlphttp/loki]

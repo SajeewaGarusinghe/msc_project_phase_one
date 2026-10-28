@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Grafana -- for human sanity checks only.
+#
+# The RCA agent does NOT use Grafana; it queries Prometheus, Tempo and Loki
+# directly. This exists so you can eyeball an incident and confirm the fault
+# actually produced the symptoms you expected before capturing it.
+#
+# No Ingress, no LoadBalancer: reach it with `make tunnel-grafana`.
+# ---------------------------------------------------------------------------
+adminUser: admin
+# Dev-only credential on a closed bench reached solely by port-forward.
+# Change it if you ever expose this beyond localhost.
+adminPassword: admin
+
+persistence:
+  enabled: false   # dashboards are provisioned from config, nothing to persist
+
+resources:
+  limits:   { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 100m, memory: 128Mi }
+
+service:
+  type: ClusterIP
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-server.observability.svc.cluster.local
+        isDefault: true
+      - name: Tempo
+        type: tempo
+        url: http://tempo.observability.svc.cluster.local:3100
+      - name: Loki
+        type: loki
+        url: http://loki.observability.svc.cluster.local:3100

@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# Tempo -- single binary (monolithic) mode.
+#
+# The distributed chart would run six components. On one node that is pure
+# overhead. Single binary stores traces on a local PVC.
+#
+# 100% SAMPLING IS NON-NEGOTIABLE for this project. The P7 provenance verifier
+# compares a callee's self-reported SERVER span against the caller's own CLIENT
+# span. If sampling drops either side of that pair, the check silently has
+# nothing to compare and the defence appears to fail for the wrong reason.
+# ---------------------------------------------------------------------------
+tempo:
+  retention: 24h
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  # No tail sampling, no probabilistic sampling, anywhere.
+  overrides:
+    defaults:
+      ingestion:
+        rate_limit_bytes: 30000000
+        burst_size_bytes: 40000000
+
+  resources:
+    limits:   { cpu: 1000m, memory: 2Gi }
+    requests: { cpu: 200m,  memory: 512Mi }
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClassName: "local-path"

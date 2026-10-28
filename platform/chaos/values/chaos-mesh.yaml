@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Chaos Mesh -- the ground-truth fault injector.
+#
+# THE CRITICAL PROPERTY IS NOT IN THIS FILE. Chaos Mesh is installed into its
+# own namespace and the agent's RBAC (platform/rbac/) grants no access to the
+# chaos-mesh.org API group and no cluster-scoped read. An agent that can list
+# NetworkChaos objects is reading the answer key.
+#
+# RBAC alone is still not sufficient -- chaos side effects leak into the target
+# pod (tc/iptables rules, stress processes in the cgroup, Kubernetes events).
+# Phase 2's recorder is what finally closes this, by filtering chaos references
+# out of captured tool responses. See docs/03-trust-boundary.md.
+#
+# NOTE: chaos-daemon runs PRIVILEGED on every node. That is inherent to how it
+# injects faults, and is one of the reasons this project uses a disposable
+# single-node bench rather than a managed cluster -- GKE Autopilot would refuse
+# to schedule it at all.
+# ---------------------------------------------------------------------------
+
+controllerManager:
+  replicaCount: 1
+  resources:
+    limits:   { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 100m, memory: 128Mi }
+
+chaosDaemon:
+  # k3s uses containerd. The socket path differs from a stock Docker/K8s node
+  # and getting this wrong is the single most common Chaos Mesh install
+  # failure on k3s: the daemon starts but every experiment fails to attach.
+  runtime: containerd
+  socketPath: /run/k3s/containerd/containerd.sock
+
+  resources:
+    limits:   { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 100m, memory: 128Mi }
+
+dashboard:
+  # Useful while authoring experiments; reached only via `make tunnel-chaos`.
+  create: true
+  securityMode: false   # closed bench, port-forward only
+  resources:
+    limits:   { cpu: 300m, memory: 256Mi }
+    requests: { cpu: 50m,  memory: 64Mi }
+
+dnsServer:
+  create: false   # DNSChaos not used in the P0 fault catalogue
+
+webhook:
+  # Only mutate pods in the application namespace. Prevents the webhook from
+  # sitting in the admission path of the observability stack, where a chaos
+  # controller restart could block telemetry pods from starting.
+  FailurePolicy: Ignore

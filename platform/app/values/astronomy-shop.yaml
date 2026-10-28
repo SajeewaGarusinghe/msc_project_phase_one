@@ -1,0 +1,86 @@
+# ---------------------------------------------------------------------------
+# OpenTelemetry Astronomy Shop (opentelemetry-demo chart).
+#
+# WHY THIS APP: it is the only maintained microservice demo where traces,
+# metrics AND logs are all first-class OTel signals from every service. The P7
+# provenance verifier needs matched CLIENT/SERVER span pairs from every call,
+# which rules out Sock Shop (no tracing) and Train Ticket (partially
+# instrumented). See docs/02-platform-choice.md.
+#
+# WHAT IS CHANGED FROM THE CHART DEFAULT:
+#   1. Every bundled observability component is DISABLED. The chart ships its
+#      own collector, Jaeger, Prometheus, Grafana and OpenSearch. Running those
+#      alongside ours would double the memory and -- worse -- give the agent a
+#      second, inconsistent view of the same incident.
+#   2. All services export to the shared collector in `observability`.
+#   3. Resources trimmed for a 16 GB node.
+#
+# VERIFY THE KEY NAMES: this chart's values schema changes between major
+# versions. After pinning a version, run `make show-app-values` and diff the
+# keys below against the chart's own defaults before trusting them.
+# ---------------------------------------------------------------------------
+
+# --- 1. disable the bundled stack ------------------------------------------
+opentelemetry-collector:
+  enabled: false
+jaeger:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
+opensearch:
+  enabled: false
+
+# --- 2. point everything at our collector ----------------------------------
+default:
+  # Single source of truth for where telemetry goes.
+  envOverrides:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: http/protobuf
+    # 100% sampling. The verifier compares caller and callee spans; dropping
+    # either side of a pair breaks the check. See tempo.yaml.
+    - name: OTEL_TRACES_SAMPLER
+      value: always_on
+    - name: OTEL_LOGS_EXPORTER
+      value: otlp
+    - name: OTEL_METRICS_EXPORTER
+      value: otlp
+
+  # Per-service defaults; individual services override where they need more.
+  resources:
+    limits:
+      memory: 256Mi
+
+  # Services emit logs over OTLP rather than to stdout, so the log record
+  # carries trace_id and span_id. That linkage is what lets the verifier tie a
+  # log line back to the span that supposedly produced it -- and what a forged
+  # log line must therefore also carry to be plausible.
+  schedulingRules:
+    nodeSelector: {}
+
+# --- 3. load generator -----------------------------------------------------
+components:
+  load-generator:
+    enabled: true
+    resources:
+      limits:
+        memory: 1Gi
+    envOverrides:
+      # Steady, modest load. The benchmark literature criticises prior RCA
+      # datasets for running at 2-3 requests/second, which is unrealistically
+      # quiet; this is higher while still fitting a single node.
+      - name: LOCUST_USERS
+        value: "15"
+      - name: LOCUST_SPAWN_RATE
+        value: "2"
+
+  # The frontend proxy is the only component reached from outside, and only
+  # through `make tunnel-frontend`.
+  frontend-proxy:
+    enabled: true
+    resources:
+      limits:
+        memory: 128Mi
