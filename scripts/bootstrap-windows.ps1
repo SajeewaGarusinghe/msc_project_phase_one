@@ -49,18 +49,34 @@ else                   { Bad  "$ramGB GB -- not enough. The stack needs ~12 GB. 
 # --- 2. WSL2 --------------------------------------------------------------
 Say ""
 Say "2. WSL2"
+$script:HasLinuxDistro = $false
 if (Get-Command wsl -ErrorAction SilentlyContinue) {
     # wsl.exe emits UTF-16; normalise so -match behaves.
-    $distros = (wsl --list --verbose 2>&1 | Out-String) -replace "`0", ""
-    if ($distros -match "Ubuntu") {
-        Good "Ubuntu distro present"
-        if ($distros -match "Ubuntu\s+\w+\s+2") { Good "running WSL version 2" }
-        else { Bad "Ubuntu is on WSL 1 -- run: wsl --set-version Ubuntu 2" }
+    $distros = (wsl --list --quiet 2>&1 | Out-String) -replace "`0", ""
+    $names = $distros -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+
+    # docker-desktop is Docker's own helper distro. It is not a usable
+    # workspace: it has no apt and no login shell, which is why `wsl -e bash`
+    # fails with execvpe(bash) when it is the default.
+    $usable = $names | Where-Object { $_ -notmatch '^docker-desktop' }
+
+    if ($names) { Say "       distros present: $($names -join ', ')" }
+    else        { Say "       no distros registered" }
+
+    if ($usable) {
+        Good "usable Linux distro: $($usable -join ', ')"
+        $script:HasLinuxDistro = $true
+        $verbose = (wsl --list --verbose 2>&1 | Out-String) -replace "`0", ""
+        foreach ($d in $usable) {
+            if ($verbose -match [regex]::Escape($d) + '\s+\w+\s+1\b') {
+                Bad "$d is on WSL 1 -- run: wsl --set-version $d 2"
+            }
+        }
     } else {
-        Bad "No Ubuntu distro. Run (as Administrator): wsl --install -d Ubuntu"
+        Bad "No usable Linux distro (docker-desktop does not count). Run as Administrator: wsl --install -d Ubuntu"
     }
 } else {
-    Bad "WSL not installed. Run (as Administrator): wsl --install -d Ubuntu"
+    Bad "WSL not installed. Run as Administrator: wsl --install -d Ubuntu"
 }
 
 # --- 3. .wslconfig memory limit ------------------------------------------
@@ -110,14 +126,21 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 # --- 5. WSL toolchain -----------------------------------------------------
 Say ""
 Say "5. Toolchain inside WSL"
-if (Get-Command wsl -ErrorAction SilentlyContinue) {
-    foreach ($tool in @("git", "make", "k3d", "kubectl", "helm")) {
-        $null = wsl -e bash -lc "command -v $tool" 2>$null
-        if ($LASTEXITCODE -eq 0) { Good "$tool present in WSL" }
-        else { Bad "$tool missing in WSL -- see docs/06-windows-setup.md step 3" }
-    }
+if (-not $script:HasLinuxDistro) {
+    Warn "Skipped -- no usable Linux distro yet (fix step 2 first)"
 } else {
-    Warn "Skipped -- WSL unavailable"
+    # 2>$null does NOT suppress a native command's stderr in PowerShell; it
+    # surfaces as a NativeCommandError. Redirect the whole stream instead.
+    $ErrorActionPreference = "Continue"
+    foreach ($tool in @("git", "make", "k3d", "kubectl", "helm")) {
+        $out = (wsl -e bash -lc "command -v $tool" 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $out -and $out -notmatch 'execvpe|ERROR') {
+            Good "$tool present in WSL"
+        } else {
+            Bad "$tool missing in WSL -- run scripts/setup-wsl.sh (see step 3 of docs/06-windows-setup.md)"
+        }
+    }
+    $ErrorActionPreference = "Stop"
 }
 
 # --- Summary --------------------------------------------------------------

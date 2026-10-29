@@ -41,6 +41,11 @@ Windows
 
 ### 1. Enable WSL2 and install Ubuntu
 
+**Note:** Docker Desktop registers its own `docker-desktop` distro. That is a
+helper, not a workspace — it has no `apt` and no login shell, which is why
+`wsl -e bash` fails with `execvpe(bash)` when it is the only distro present.
+You still need a real distro.
+
 In an **Administrator** PowerShell:
 
 ```powershell
@@ -69,30 +74,29 @@ Then `wsl --shutdown` in PowerShell and reopen Ubuntu for it to take effect.
 
 ### 3. Install the toolchain inside Ubuntu
 
+Clone the repo first (step 4), then run the one-shot installer:
+
 ```bash
-sudo apt-get update
-sudo apt-get install -y make git curl
-
-# k3d
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-
-# kubectl
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl
-
-# helm
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+bash scripts/setup-wsl.sh
 ```
 
-Verify: `docker ps && k3d version && kubectl version --client && helm version`
+It installs `make`, `git`, `curl`, **k3d**, **kubectl** (checksum-verified) and
+**helm**, and — importantly — checks that Docker Desktop's **WSL integration is
+enabled for this distro**. That last one is the step people miss: Docker running
+on Windows is not the same as `docker` working inside Ubuntu. Enable it under
+*Docker Desktop → Settings → Resources → WSL Integration*, Apply & Restart, then
+reopen the Ubuntu shell.
+
+The script is safe to re-run; every step is skipped if already satisfied.
 
 ### 4. Clone and run
 
 ```bash
 cd ~
-git clone https://github.com/SajeewaGarusinghe/msc_project_phase_one.git
+git clone -b feat/p0-bench https://github.com/SajeewaGarusinghe/msc_project_phase_one.git
 cd msc_project_phase_one
-git checkout feat/p0-bench
+
+bash scripts/setup-wsl.sh      # step 3, if you have not run it
 
 make local-up
 make install TARGET=local
