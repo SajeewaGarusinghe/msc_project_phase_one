@@ -88,6 +88,29 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+# A docker binary under /mnt/c is Windows' docker.exe reached through WSL PATH
+# interop. It is not a Linux client and can never reach the daemon from here --
+# a distinctive signature worth calling out by name.
+DOCKER_BIN="$(command -v docker 2>/dev/null || true)"
+case "$DOCKER_BIN" in
+  /mnt/[a-z]/*)
+    red "The only 'docker' on PATH is the WINDOWS executable:"
+    red "    $DOCKER_BIN"
+    red "reached through WSL's PATH interop. It cannot talk to the daemon from Linux."
+    docker_diagnose
+    red "This means WSL integration has never been enabled for this distro."
+    echo
+    echo "  Fix: Docker Desktop -> Settings -> Resources -> WSL Integration"
+    echo "       -> toggle ON the row for this distro ($(. /etc/os-release 2>/dev/null; echo "${NAME:-Ubuntu}"))"
+    echo "       -> Apply & Restart -> reopen this shell."
+    echo
+    echo "  The per-distro toggle is separate from the 'default WSL distro'"
+    echo "  checkbox above it. If this distro is not your default, that"
+    echo "  checkbox does NOT cover it."
+    exit 1
+    ;;
+esac
+
 if ! docker info >/dev/null 2>&1; then
   red "docker CLI present but the daemon is unreachable."
   docker_diagnose
