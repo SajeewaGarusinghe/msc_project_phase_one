@@ -8,6 +8,7 @@
 | [04 — Cost control](04-cost-control.md) | before leaving the bench running |
 | [05 — Runbook](05-runbook.md) | day-to-day operation |
 | [06 — Windows setup](06-windows-setup.md) | running locally on Windows — WSL2, Docker Desktop, why not D: |
+| [07 — Port forwarding](07-port-forwarding.md) | raw kubectl commands, backgrounding, and the WSL localhost gotcha |
 
 ## Phase 1 in one paragraph
 

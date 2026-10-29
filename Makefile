@@ -122,7 +122,18 @@ chaos-list: ## List available experiments and anything currently running
 	@KUBECONFIG=$(KUBECONFIG_PATH) kubectl get networkchaos,podchaos,stresschaos -n chaos-mesh 2>/dev/null || true
 
 # --------------------------------------------------------------------- access
-.PHONY: tunnel-grafana tunnel-prometheus tunnel-tempo tunnel-loki tunnel-frontend tunnel-chaos
+.PHONY: ports tunnel-grafana tunnel-prometheus tunnel-tempo tunnel-loki tunnel-frontend tunnel-chaos
+ports: ## Print the raw kubectl port-forward commands
+	@echo "  export KUBECONFIG=$(KUBECONFIG_PATH)"
+	@echo "  kubectl port-forward -n observability svc/grafana            3000:80    # admin/admin"
+	@echo "  kubectl port-forward -n app           svc/frontend-proxy     8080:8080"
+	@echo "  kubectl port-forward -n observability svc/prometheus-server  9090:80"
+	@echo "  kubectl port-forward -n observability svc/tempo              3200:3200"
+	@echo "  kubectl port-forward -n observability svc/loki               3100:3100"
+	@echo "  kubectl port-forward -n chaos-mesh    svc/chaos-dashboard    2333:2333"
+	@echo ""
+	@echo "  Windows/WSL: add --address 0.0.0.0 if localhost does not carry through."
+	@echo "  Details: docs/07-port-forwarding.md"
 tunnel-grafana:    ## Grafana on localhost:3000 (admin/admin)
 	@scripts/tunnel.sh grafana
 tunnel-prometheus: ## Prometheus on localhost:9090

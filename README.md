@@ -99,6 +99,7 @@ See [docs/03-trust-boundary.md](docs/03-trust-boundary.md).
 | [Trust boundary](docs/03-trust-boundary.md) | **before touching `platform/rbac/`** |
 | [Cost control](docs/04-cost-control.md) | before leaving anything running |
 | [Runbook](docs/05-runbook.md) | day-to-day operation and troubleshooting |
+| [Port forwarding](docs/07-port-forwarding.md) | reaching the UIs, manually or via `make ports` |
 | [Windows setup](docs/06-windows-setup.md) | **running locally on Windows — read before cloning to a drive** |
 
 ---

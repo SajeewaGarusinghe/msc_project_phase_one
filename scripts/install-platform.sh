@@ -14,6 +14,14 @@
 #                           verified against resources that already exist
 #
 # Idempotent: every step is `helm upgrade --install` or `kubectl apply`.
+#
+# Each helm step uses --wait, so the script BLOCKS until that release's pods are
+# ready. On a first install that is mostly image pulls; on an upgrade it is a
+# rollout. Either way it can sit silently for minutes and look hung.
+#
+# Watch it from a second shell:   make diag
+# Shorten the wait:               HELM_TIMEOUT=3m make install
+# Skip waiting entirely:          WAIT=0 make install   (then poll with make diag)
 # ---------------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
@@ -26,6 +34,14 @@ P="$REPO_ROOT/platform"
 
 # Turn an empty version into no flag at all, a pinned version into --version X.
 ver_flag() { [[ -z "${1:-}" ]] && echo "" || echo "--version $1"; }
+
+HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+if [[ "${WAIT:-1}" == "0" ]]; then
+  WAIT_FLAGS=()
+  c_ylw "WAIT=0: not waiting for readiness. Poll with 'make diag'."
+else
+  WAIT_FLAGS=(--wait --timeout "$HELM_TIMEOUT")
+fi
 
 c_ylw "[1/5] namespaces"
 kubectl apply -f "$P/namespaces.yaml"
@@ -43,39 +59,39 @@ c_ylw "[3/5] observability backends"
 # shellcheck disable=SC2046
 helm upgrade --install prometheus prometheus-community/prometheus \
   -n observability $(ver_flag "$CHART_VERSION_PROMETHEUS") \
-  -f "$P/observability/values/prometheus.yaml" --wait --timeout 10m
+  -f "$P/observability/values/prometheus.yaml" "${WAIT_FLAGS[@]}"
 
 # shellcheck disable=SC2046
 helm upgrade --install tempo grafana/tempo \
   -n observability $(ver_flag "$CHART_VERSION_TEMPO") \
-  -f "$P/observability/values/tempo.yaml" --wait --timeout 10m
+  -f "$P/observability/values/tempo.yaml" "${WAIT_FLAGS[@]}"
 
 # shellcheck disable=SC2046
 helm upgrade --install loki grafana/loki \
   -n observability $(ver_flag "$CHART_VERSION_LOKI") \
-  -f "$P/observability/values/loki.yaml" --wait --timeout 10m
+  -f "$P/observability/values/loki.yaml" "${WAIT_FLAGS[@]}"
 
 # shellcheck disable=SC2046
 helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
   -n observability $(ver_flag "$CHART_VERSION_OTEL_COLLECTOR") \
-  -f "$P/observability/values/otel-collector.yaml" --wait --timeout 10m
+  -f "$P/observability/values/otel-collector.yaml" "${WAIT_FLAGS[@]}"
 
 # shellcheck disable=SC2046
 helm upgrade --install grafana grafana/grafana \
   -n observability $(ver_flag "$CHART_VERSION_GRAFANA") \
-  -f "$P/observability/values/grafana.yaml" --wait --timeout 10m
+  -f "$P/observability/values/grafana.yaml" "${WAIT_FLAGS[@]}"
 
 c_ylw "[4/5] application (Astronomy Shop)"
 # shellcheck disable=SC2046
 helm upgrade --install astronomy open-telemetry/opentelemetry-demo \
   -n app $(ver_flag "$CHART_VERSION_OTEL_DEMO") \
-  -f "$P/app/values/astronomy-shop.yaml" --wait --timeout 20m
+  -f "$P/app/values/astronomy-shop.yaml" "${WAIT_FLAGS[@]}"
 
 c_ylw "[5/5] chaos + rbac"
 # shellcheck disable=SC2046
 helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
   -n chaos-mesh $(ver_flag "$CHART_VERSION_CHAOS_MESH") \
-  -f "$P/chaos/values/chaos-mesh.yaml" --wait --timeout 10m
+  -f "$P/chaos/values/chaos-mesh.yaml" "${WAIT_FLAGS[@]}"
 
 kubectl apply -f "$P/rbac/"
 
