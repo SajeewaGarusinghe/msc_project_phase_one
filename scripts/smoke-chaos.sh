@@ -22,23 +22,44 @@ F="$REPO_ROOT/platform/chaos/experiments/${EXP}.yaml"
 
 WINDOW="${WINDOW:-90}"
 
-# Count traces SLOWER than a threshold inside an explicit time window.
+# Measure the trace-duration DISTRIBUTION over an explicit window.
 #
-# An earlier revision counted traces with limit=20 and compared 20 to 20, and
-# watched pod restarts -- which cannot move for a latency fault. Neither could
-# ever show a network delay. Latency is the signal this fault produces, so
-# latency is what has to be measured, over a bounded window so "before" does
-# not include the whole preceding hour.
-SLOW_MS="${SLOW_MS:-250}"
-count_slow() {   # count_slow <start-unix> <end-unix>
+# Two earlier revisions failed here. The first counted traces with limit=20 and
+# compared 20 to 20. The second counted traces slower than a fixed 250ms, but
+# 95% of this app's traces are already slower than that at rest, and the count
+# saturated at the page limit -- so "95 -> 100" was a capped number moving, not
+# latency rising. A count above an arbitrary threshold cannot discriminate when
+# the threshold sits below ambient latency.
+#
+# Percentiles of the actual durations have neither problem.
+LIMIT="${LIMIT:-200}"
+
+durations() {   # durations <start-unix> <end-unix>  ->  one duration (ms) per line
   kubectl get --raw \
-    "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&minDuration=${SLOW_MS}ms&limit=100" \
-    2>/dev/null | grep -o '"traceID"' | wc -l
+    "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&limit=${LIMIT}" \
+    2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for t in d.get('traces', []):
+    print(t.get('durationMs', 0))
+"
 }
-count_any() {    # count_any <start-unix> <end-unix>
-  kubectl get --raw \
-    "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&limit=100" \
-    2>/dev/null | grep -o '"traceID"' | wc -l
+
+stats() {       # stats <label>  (reads durations on stdin)
+  python3 -c "
+import sys
+v = sorted(int(x) for x in sys.stdin.read().split() if x.strip().isdigit())
+if not v:
+    print('  $1: no traces in window'); sys.exit(0)
+def pct(p):
+    return v[min(len(v) - 1, int(len(v) * p / 100))]
+sat = ' (SATURATED at the page limit -- raise LIMIT)' if len(v) >= ${LIMIT} else ''
+print(f'  $1: n={len(v)}{sat}  p50={pct(50)}ms  p95={pct(95)}ms  max={v[-1]}ms')
+print(f'__P95__ {pct(95)}')
+"
 }
 
 ROOT="$(grep -oP 'bench.msc/root-cause:\s*"\K[^"]+' "$F" || echo '?')"
@@ -53,14 +74,14 @@ echo   "  window         : ${WINDOW}s"
 echo
 c_ylw "1. Baseline (the ${WINDOW}s BEFORE injection)"
 B_END=$(date +%s); B_START=$(( B_END - WINDOW ))
-B_SLOW="$(count_slow "$B_START" "$B_END")"
-B_ANY="$(count_any "$B_START" "$B_END")"
+B_OUT="$(durations "$B_START" "$B_END" | stats baseline)"
+echo "$B_OUT" | grep -v '^__P95__'
+B_P95="$(echo "$B_OUT" | awk '/^__P95__/{print $2}')"
 B_PODS="$(kubectl get pods -n app --no-headers 2>/dev/null | awk '{s+=$4} END{print s+0}')"
-printf "  traces: %s total, %s slower than %sms\n" "$B_ANY" "$B_SLOW" "$SLOW_MS"
-echo   "  pod restarts in app: $B_PODS"
-if [[ "$B_ANY" -eq 0 ]]; then
-  c_red "  No traffic at all. The load generator is not driving the app --"
-  c_red "  nothing can be measured. Check: kubectl get pods -n app | grep load"
+echo "  pod restarts in app: $B_PODS"
+if [[ -z "$B_P95" ]]; then
+  c_red "  No traffic. The load generator is not driving the app, so nothing"
+  c_red "  can be measured. Check: kubectl get pods -n app | grep load"
 fi
 
 echo
@@ -88,31 +109,39 @@ sleep "$WINDOW"
 echo
 c_ylw "4. After injection (the ${WINDOW}s SINCE)"
 A_END=$(date +%s)
-A_SLOW="$(count_slow "$INJECT_AT" "$A_END")"
-A_ANY="$(count_any "$INJECT_AT" "$A_END")"
+A_OUT="$(durations "$INJECT_AT" "$A_END" | stats after)"
+echo "$A_OUT" | grep -v '^__P95__'
+A_P95="$(echo "$A_OUT" | awk '/^__P95__/{print $2}')"
 A_PODS="$(kubectl get pods -n app --no-headers 2>/dev/null | awk '{s+=$4} END{print s+0}')"
-printf "  traces: %s total, %s slower than %sms\n" "$A_ANY" "$A_SLOW" "$SLOW_MS"
-echo   "  pod restarts in app: $A_PODS  (was $B_PODS)"
+echo "  pod restarts in app: $A_PODS  (was $B_PODS)"
 
 echo
 c_ylw "5. Verdict"
 VISIBLE=0
-if [[ "$A_SLOW" -gt "$B_SLOW" ]]; then
-  c_grn "  LATENCY: slow traces rose $B_SLOW -> $A_SLOW   (fault is visible)"
-  VISIBLE=1
-else
-  c_ylw "  LATENCY: slow traces $B_SLOW -> $A_SLOW (no rise)"
+if [[ -n "$B_P95" && -n "$A_P95" ]]; then
+  DELTA=$(( A_P95 - B_P95 ))
+  if [[ "$DELTA" -gt 50 ]]; then
+    c_grn "  LATENCY: p95 rose ${B_P95}ms -> ${A_P95}ms  (+${DELTA}ms)"
+    VISIBLE=1
+  else
+    c_ylw "  LATENCY: p95 ${B_P95}ms -> ${A_P95}ms  (change ${DELTA}ms, within noise)"
+  fi
 fi
 if [[ "$A_PODS" -gt "$B_PODS" ]]; then
-  c_grn "  AVAILABILITY: pod restarts rose $B_PODS -> $A_PODS"
-  VISIBLE=1
+  c_ylw "  RESTARTS: $B_PODS -> $A_PODS. Which pod, and was it the target?"
+  kubectl get pods -n app --no-headers 2>/dev/null \
+    | awk '$4>0 {printf "            %s  restarts=%s\n",$1,$4}'
+  echo  "            A restart under a LATENCY fault usually means a liveness"
+  echo  "            probe timed out. That is a real symptom, but it is a"
+  echo  "            different fault class than the one being injected --"
+  echo  "            worth knowing before you treat the scenario as clean."
 fi
 if [[ "$VISIBLE" -eq 0 ]]; then
-  c_red "  No measurable change."
-  echo  "    - a latency fault needs minDuration BELOW the injected delay;"
-  echo  "      this run used SLOW_MS=$SLOW_MS. Try: SLOW_MS=150 make chaos-smoke EXP=$EXP"
-  echo  "    - or the delay is not reaching the caller. Inspect:"
-  echo  "      kubectl describe $KIND $NAME -n chaos-mesh"
+  c_red "  No clear latency change."
+  echo  "    - the fault may not reach the CALLER. This experiment delays"
+  echo  "      traffic TO product-catalog, so the rise shows in its callers."
+  echo  "    - inspect: kubectl describe $KIND $NAME -n chaos-mesh"
+  echo  "    - or widen the window: WINDOW=180 make chaos-smoke EXP=$EXP"
 fi
 
 echo

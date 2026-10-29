@@ -87,6 +87,31 @@ If the cause is the loudest thing on the dashboard, the scenario is too easy and
 will not discriminate between a real diagnosis and a prominence heuristic. Reshape
 it before capturing. See `platform/chaos/experiments/README.md`.
 
+## Reaching the UIs from Windows
+
+`make tunnel-grafana` **blocks** -- it holds the tunnel open. Leave it running
+and open the URL from another window.
+
+```bash
+make tunnel-grafana      # terminal 1, leave running -> http://localhost:3000
+```
+
+| UI | Command | URL | Login |
+|---|---|---|---|
+| Grafana | `make tunnel-grafana` | localhost:3000 | admin / admin |
+| Astronomy Shop | `make tunnel-frontend` | localhost:8080 | — |
+| Prometheus | `make tunnel-prometheus` | localhost:9090 | — |
+| Chaos dashboard | `make tunnel-chaos` | localhost:2333 | — |
+
+If Windows cannot reach the port, `kubectl` is listening on WSL's loopback and
+WSL localhost forwarding is not carrying it through. Bind to all interfaces:
+
+```bash
+BIND=0.0.0.0 make tunnel-grafana
+```
+
+That also exposes the port to your LAN, which is why it is not the default.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

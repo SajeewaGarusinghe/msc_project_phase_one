@@ -34,6 +34,23 @@ declare -A MAP=(
 WHAT="${1:-grafana}"
 [[ -n "${TARGET[$WHAT]:-}" ]] || die "usage: tunnel.sh {${!TARGET[*]}}"
 
-c_grn "Forwarding $WHAT on localhost:${MAP[$WHAT]%%:*} -- Ctrl-C to stop"
+# BIND: kubectl port-forward listens on 127.0.0.1 by default.
+#
+# On WSL2 that is normally reachable from Windows via localhost forwarding,
+# but it fails when mirrored networking is off, on some Windows builds, and
+# whenever localhostForwarding has been disabled in .wslconfig. Binding to
+# 0.0.0.0 makes the forward reachable from Windows in every case.
+#
+# It also exposes the port to your LAN, so it is opt-in rather than default.
+BIND="${BIND:-127.0.0.1}"
+
+LOCAL_PORT="${MAP[$WHAT]%%:*}"
+c_grn "Forwarding $WHAT -> http://localhost:${LOCAL_PORT}   (Ctrl-C to stop)"
+if grep -qi microsoft /proc/version 2>/dev/null && [[ "$BIND" == "127.0.0.1" ]]; then
+  c_dim "  WSL: if Windows cannot reach it, retry with:"
+  c_dim "       BIND=0.0.0.0 make tunnel-$WHAT"
+fi
+c_dim "  Leave this running and open the URL in another window."
+
 # shellcheck disable=SC2086
-exec kubectl port-forward ${TARGET[$WHAT]} ${MAP[$WHAT]}
+exec kubectl port-forward --address "$BIND" ${TARGET[$WHAT]} ${MAP[$WHAT]}
