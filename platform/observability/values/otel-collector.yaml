@@ -96,11 +96,17 @@ config:
       endpoint: http://loki.observability.svc.cluster.local:3100/otlp
       tls: { insecure: true }
 
-    prometheusremotewrite:
+    prometheus_remote_write:
       endpoint: http://prometheus-server.observability.svc.cluster.local/api/v1/write
       tls: { insecure: true }
-      # Keep resource attributes as labels so a series can be attributed to the
-      # pod that produced it. Without this the metric loses its author.
+      # Keep resource attributes as labels so a series can be attributed to
+      # the pod that produced it. Without this a metric loses its author,
+      # which matters here because attribution is the thesis.
+      #
+      # The collector warns that this is deprecated in favour of
+      # resource_constant_labels. That replacement's schema has not been
+      # verified against this collector version, so the working setting is
+      # kept rather than guessed at. Revisit when pinning versions.
       resource_to_telemetry_conversion:
         enabled: true
 
@@ -113,7 +119,7 @@ config:
       metrics:
         receivers:  [otlp]
         processors: [memory_limiter, k8s_attributes, batch]
-        exporters:  [prometheusremotewrite]
+        exporters:  [prometheus_remote_write]
       logs:
         receivers:  [otlp]
         processors: [memory_limiter, k8s_attributes, batch]

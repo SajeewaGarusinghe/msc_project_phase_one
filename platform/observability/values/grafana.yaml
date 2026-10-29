@@ -32,7 +32,7 @@ datasources:
         isDefault: true
       - name: Tempo
         type: tempo
-        url: http://tempo.observability.svc.cluster.local:3100
+        url: http://tempo.observability.svc.cluster.local:3200
       - name: Loki
         type: loki
         url: http://loki.observability.svc.cluster.local:3100

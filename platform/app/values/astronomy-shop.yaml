@@ -34,31 +34,43 @@ opensearch:
 
 # --- 2. point everything at our collector ----------------------------------
 default:
-  # Single source of truth for where telemetry goes.
+  # THE ONLY VARIABLE THAT MATTERS HERE IS OTEL_COLLECTOR_NAME.
+  #
+  # The chart does NOT let you point the app at a collector by overriding
+  # OTEL_EXPORTER_OTLP_ENDPOINT from this block. Every component sets its own
+  # endpoint in components.<name>.env as:
+  #
+  #     OTEL_EXPORTER_OTLP_ENDPOINT = http://$(OTEL_COLLECTOR_NAME):4318
+  #                              (or :4317 for the gRPC components)
+  #
+  # A component-level env entry wins over anything set here -- which is exactly
+  # what the "hides previous definition of OTEL_EXPORTER_OTLP_ENDPOINT"
+  # warnings were reporting. An earlier revision of this file overrode the
+  # endpoint directly, the override lost, and every service kept exporting to
+  # the chart's bundled collector service name, which we disable. Nothing
+  # reached Tempo or Loki and the cluster looked perfectly healthy.
+  #
+  # Overriding the single host variable fixes all components at once, and works
+  # for the gRPC ones too because only the host is substituted.
   envOverrides:
-    - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
-    - name: OTEL_EXPORTER_OTLP_PROTOCOL
-      value: http/protobuf
-    # 100% sampling. The verifier compares caller and callee spans; dropping
-    # either side of a pair breaks the check. See tempo.yaml.
+    - name: OTEL_COLLECTOR_NAME
+      value: otel-collector-opentelemetry-collector.observability.svc.cluster.local
+
+    # 100% sampling. The P7 verifier compares a callee's SERVER span against
+    # the caller's CLIENT span; dropping either side breaks the check.
     - name: OTEL_TRACES_SAMPLER
       value: always_on
+
+    # Logs over OTLP rather than stdout, so each record carries trace_id and
+    # span_id. That linkage is what ties a log line to the span that supposedly
+    # produced it -- and what a forged line must also carry to be plausible.
     - name: OTEL_LOGS_EXPORTER
       value: otlp
-    - name: OTEL_METRICS_EXPORTER
-      value: otlp
 
-  # NOTE: `resources` is NOT valid here. The chart's values.schema.json allows
-  # only: enabled, env, envOverrides, image, podSecurityContext, replicas,
-  # revisionHistoryLimit, schedulingRules, securityContext -- and rejects
-  # anything else outright. Per-service limits go under components.<name>.
-  # The chart's own per-component defaults are tuned for the documented ~6 GB.
-
-  # Services emit logs over OTLP rather than to stdout, so the log record
-  # carries trace_id and span_id. That linkage is what lets the verifier tie a
-  # log line back to the span that supposedly produced it -- and what a forged
-  # log line must therefore also carry to be plausible.
+  # DO NOT set OTEL_EXPORTER_OTLP_PROTOCOL here. Components are split between
+  # the HTTP port (4318) and the gRPC port (4317); forcing one protocol
+  # globally would point the gRPC components' protocol at the wrong port.
+  # Each component's own default is already correct for the port it uses.
 
 # --- 3. load generator -----------------------------------------------------
 components:

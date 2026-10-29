@@ -7,6 +7,8 @@
 # Run when verify reports a backend holds no data.
 # ---------------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# A diagnostic must never abort partway and hide the step that mattered.
+set +e
 require_kubeconfig
 need kubectl "Install kubectl."
 
@@ -40,7 +42,7 @@ fi
 
 echo
 c_ylw "4. Are the backends reachable through the API server proxy?"
-for spec in "tempo:3100:/ready" "loki:3100:/ready" "prometheus-server:80:/-/ready"; do
+for spec in "tempo:3200:/ready" "loki:3100:/ready" "prometheus-server:80:/-/ready"; do
   svc="${spec%%:*}"; rest="${spec#*:}"; port="${rest%%:*}"; path="${rest#*:}"
   if kubectl get --raw "/api/v1/namespaces/observability/services/${svc}:${port}/proxy${path}" >/dev/null 2>&1; then
     c_grn "     $svc:$port reachable"
@@ -51,7 +53,7 @@ done
 
 echo
 c_ylw "5. Has any trace arrived at all?"
-BODY="$(kubectl get --raw '/api/v1/namespaces/observability/services/tempo:3100/proxy/api/search?limit=1' 2>/dev/null)"
+BODY="$(kubectl get --raw '/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?limit=1' 2>/dev/null || true)"
 if [ -z "$BODY" ]; then
   c_red "     probe failed (could not reach tempo)"
 else

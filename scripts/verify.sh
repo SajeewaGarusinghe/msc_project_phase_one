@@ -55,7 +55,11 @@ probe() {
 check_backend() {
   local label="$1" ns="$2" svc="$3" port="$4" path="$5" marker="$6" hint="$7"
   local body rc
-  body="$(probe "$ns" "$svc" "$port" "$path")"; rc=$?
+  # `|| true` so a failed probe cannot abort the whole script under `set -e`,
+  # and a bare `cond && assign` is avoided for the same reason.
+  body="$(probe "$ns" "$svc" "$port" "$path" || true)"
+  local rc=0
+  if [[ -z "$body" ]]; then rc=1; fi
   if [[ $rc -ne 0 || -z "$body" ]]; then
     bad "$label -- PROBE FAILED (could not reach svc/$svc:$port in $ns)"
     echo "          This is a probe problem, not necessarily a data problem."
@@ -70,10 +74,10 @@ check_backend() {
   fi
 }
 
-check_backend "Tempo"  observability tempo 3100 "/api/search?limit=1" "traceID" \
+check_backend "Tempo"  observability tempo 3200 "/api/search?limit=1" "traceID" \
   "kubectl get deploy -n app -o name | head -1 | xargs -I{} kubectl exec -n app {} -- env | grep OTEL_EXPORTER"
 
-PROM="$(probe observability prometheus-server 80 "/api/v1/query?query=count(up)")"
+PROM="$(probe observability prometheus-server 80 "/api/v1/query?query=count(up)" || true)"
 if [[ "$PROM" == *'"status":"success"'* ]]; then
   ok "Prometheus responding"
 else
