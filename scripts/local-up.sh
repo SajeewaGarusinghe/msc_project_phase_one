@@ -33,8 +33,37 @@ TARGET=local "$REPO_ROOT/scripts/kubeconfig.sh"
 # k3d returns once the containers are up; k3s inside them is not yet serving.
 export KUBECONFIG="$KUBECONFIG_PATH"
 if ! wait_for_api 90; then
-  die "Cluster started but the API never became ready (180s).
-  Inspect with:  docker logs k3d-rca-bench-server-0 --tail 40"
+  echo
+  c_red "The API never became ready (180s). Diagnosing automatically:"
+
+  echo
+  c_ylw "=== k3d containers ==="
+  docker ps -a --filter "name=k3d-${CLUSTER}" \
+    --format '  {{.Names}}\t{{.Status}}' 2>/dev/null
+
+  echo
+  c_ylw "=== is the API port held by something else? ==="
+  PORT="$(python3 -c "
+import yaml
+try: print(yaml.safe_load(open('$REPO_ROOT/infra/local/k3d-cluster.yaml'))['kubeAPI']['hostPort'])
+except Exception: print('6445')
+" 2>/dev/null || echo 6445)"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | grep ":${PORT}" | sed 's/^/  /' || echo "  nothing listening on ${PORT}"
+  fi
+
+  echo
+  c_ylw "=== k3s server log (last 40 lines) ==="
+  docker logs "k3d-${CLUSTER}-server-0" --tail 40 2>&1 | sed 's/^/  /'
+
+  echo
+  c_red "k3s is not serving. The usual cause after a 'wsl --shutdown' is that"
+  c_red "the cluster's containers restarted into a state k3s cannot resume."
+  echo
+  c_ylw "Rebuild it (the platform reinstalls from scratch; nothing here is precious yet):"
+  echo  "    make local-reset"
+  echo  "    make bench TARGET=local"
+  exit 1
 fi
 
 c_grn "Local bench up and the API is serving."

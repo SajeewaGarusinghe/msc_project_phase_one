@@ -64,7 +64,7 @@ status: ## Is the node running and burning credits?
 	@scripts/bench.sh status
 
 # ------------------------------------------------------------------ local k3d
-.PHONY: local-up local-stop local-destroy wsl-memory
+.PHONY: local-up local-stop local-destroy local-reset wsl-memory
 wsl-memory: ## Raise WSL's RAM allocation (MEM=24GB CPUS=8)
 	@scripts/wsl-memory.sh $(MEM) $(CPUS)
 local-up:      ## Create/start the free local k3d bench
@@ -73,6 +73,9 @@ local-stop:    ## Stop the local bench, keep its state
 	@scripts/local-down.sh stop
 local-destroy: ## Delete the local bench entirely
 	@scripts/local-down.sh destroy
+
+local-reset: ## Delete and recreate the local cluster (when k3s will not resume)
+	@scripts/local-down.sh reset
 
 # -------------------------------------------------------------------- cluster
 .PHONY: kubeconfig install verify diag doctor telemetry pin-versions uninstall bench

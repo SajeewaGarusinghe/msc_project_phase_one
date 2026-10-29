@@ -60,6 +60,24 @@ the loudest symptom is the **victim** rather than the root cause. If the root
 cause is the most prominent thing on the dashboard, the scenario is too easy
 and will not discriminate between real diagnosis and a prominence heuristic.
 
+## The cluster will not start after `wsl --shutdown`
+
+k3d containers restart with WSL, but k3s inside them does not always resume.
+`make local-up` waits 180s for the API, then prints the container states, what
+is holding the API port, and the k3s server log.
+
+The fix is to rebuild. Nothing in the cluster is precious -- every bit of it is
+reproducible from this repo:
+
+```bash
+make local-reset          # delete + recreate the cluster
+make bench TARGET=local   # install + verify
+```
+
+This changes once Phase 2 starts capturing snapshots. Snapshots are written to
+the repo, not into the cluster, so `local-reset` stays safe -- but check before
+assuming that of anything you add later.
+
 ## When something breaks
 
 ```bash
