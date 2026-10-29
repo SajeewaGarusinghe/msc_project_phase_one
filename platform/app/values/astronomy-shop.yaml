@@ -1,0 +1,122 @@
+# ---------------------------------------------------------------------------
+# OpenTelemetry Astronomy Shop (opentelemetry-demo chart).
+#
+# WHY THIS APP: it is the only maintained microservice demo where traces,
+# metrics AND logs are all first-class OTel signals from every service. The P7
+# provenance verifier needs matched CLIENT/SERVER span pairs from every call,
+# which rules out Sock Shop (no tracing) and Train Ticket (partially
+# instrumented). See docs/02-platform-choice.md.
+#
+# WHAT IS CHANGED FROM THE CHART DEFAULT:
+#   1. Every bundled observability component is DISABLED. The chart ships its
+#      own collector, Jaeger, Prometheus, Grafana and OpenSearch. Running those
+#      alongside ours would double the memory and -- worse -- give the agent a
+#      second, inconsistent view of the same incident.
+#   2. All services export to the shared collector in `observability`.
+#   3. Resources trimmed for a 16 GB node.
+#
+# VERIFY THE KEY NAMES: this chart's values schema changes between major
+# versions. After pinning a version, run `make show-app-values` and diff the
+# keys below against the chart's own defaults before trusting them.
+# ---------------------------------------------------------------------------
+
+# --- 1. disable the bundled stack ------------------------------------------
+opentelemetry-collector:
+  enabled: false
+jaeger:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
+opensearch:
+  enabled: false
+
+# --- 2. point everything at our collector ----------------------------------
+default:
+  # THE ONLY VARIABLE THAT MATTERS HERE IS OTEL_COLLECTOR_NAME.
+  #
+  # The chart does NOT let you point the app at a collector by overriding
+  # OTEL_EXPORTER_OTLP_ENDPOINT from this block. Every component sets its own
+  # endpoint in components.<name>.env as:
+  #
+  #     OTEL_EXPORTER_OTLP_ENDPOINT = http://$(OTEL_COLLECTOR_NAME):4318
+  #                              (or :4317 for the gRPC components)
+  #
+  # A component-level env entry wins over anything set here -- which is exactly
+  # what the "hides previous definition of OTEL_EXPORTER_OTLP_ENDPOINT"
+  # warnings were reporting. An earlier revision of this file overrode the
+  # endpoint directly, the override lost, and every service kept exporting to
+  # the chart's bundled collector service name, which we disable. Nothing
+  # reached Tempo or Loki and the cluster looked perfectly healthy.
+  #
+  # Overriding the single host variable fixes all components at once, and works
+  # for the gRPC ones too because only the host is substituted.
+  envOverrides:
+    - name: OTEL_COLLECTOR_NAME
+      value: otel-collector-opentelemetry-collector.observability.svc.cluster.local
+
+    # 100% sampling. The P7 verifier compares a callee's SERVER span against
+    # the caller's CLIENT span; dropping either side breaks the check.
+    - name: OTEL_TRACES_SAMPLER
+      value: always_on
+
+    # Logs over OTLP rather than stdout, so each record carries trace_id and
+    # span_id. That linkage is what ties a log line to the span that supposedly
+    # produced it -- and what a forged line must also carry to be plausible.
+    - name: OTEL_LOGS_EXPORTER
+      value: otlp
+
+  # DO NOT set OTEL_EXPORTER_OTLP_PROTOCOL here. Components are split between
+  # the HTTP port (4318) and the gRPC port (4317); forcing one protocol
+  # globally would point the gRPC components' protocol at the wrong port.
+  # Each component's own default is already correct for the port it uses.
+
+# --- 3. trim what this project does not use --------------------------------
+#
+# The node hit 95% of its memory ceiling and OOMKilled Tempo. These components
+# are not on the request path the RCA experiments reason about, so none of them
+# changes the trace graph, and dropping them buys back the headroom.
+#
+# KEPT deliberately: kafka, because checkout publishes to it and removing it
+# would make checkout log publish errors continuously -- polluting the clean
+# baseline that every attack measurement is compared against.
+components:
+  # The chart's schema requires BOTH `enabled` and `useDefault` on every
+  # component it sees -- `useDefault: {env: true}` means "start from the
+  # default env list", which is what makes default.envOverrides reach this
+  # component at all. Omitting it fails validation with
+  #     at '/components/<name>': missing property 'useDefault'
+  chatbot:         { enabled: false, useDefault: { env: true } }  # LLM demo, large image
+  firepit:         { enabled: false, useDefault: { env: true } }  # profiling UI
+  telemetry-docs:  { enabled: false, useDefault: { env: true } }  # docs site
+  flagd-ui:        { enabled: false, useDefault: { env: true } }  # UI only; flagd itself stays
+  mcp:             { enabled: false, useDefault: { env: true } }  # MCP demo
+  opamp-server:    { enabled: false, useDefault: { env: true } }  # agent-management demo
+  accounting:      { enabled: false, useDefault: { env: true } }  # kafka consumer, off the path
+  fraud-detection: { enabled: false, useDefault: { env: true } }  # kafka consumer; was crash-looping
+
+  load-generator:
+    enabled: true
+    useDefault:
+      env: true
+    resources:
+      limits:
+        memory: 1Gi
+    envOverrides:
+      # Steady, modest load. The benchmark literature criticises prior RCA
+      # datasets for running at 2-3 requests/second, which is unrealistically
+      # quiet; this is higher while still fitting a single node.
+      - name: LOCUST_USERS
+        value: "15"
+      - name: LOCUST_SPAWN_RATE
+        value: "2"
+
+  # The only component reached from outside, and only via `make tunnel-frontend`.
+  frontend-proxy:
+    enabled: true
+    useDefault:
+      env: true
+    resources:
+      limits:
+        memory: 128Mi

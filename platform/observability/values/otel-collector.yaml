@@ -1,0 +1,171 @@
+# ---------------------------------------------------------------------------
+# OpenTelemetry Collector -- gateway mode.
+#
+# This is the single ingress point for all application telemetry and, later,
+# the natural place to install the provenance verifier as a processor. Running
+# it as a Deployment (not a DaemonSet) on a single-node bench keeps one copy.
+#
+# The k8sattributes processor is the piece that matters for this project: it
+# resolves the sending pod's IP to real Kubernetes metadata and sets the
+# resource attributes from what the CLUSTER knows, rather than trusting what
+# the workload claims about itself. That is a weak form of the authorship check
+# the P7 verifier generalises -- see docs/04-why-this-shape.md.
+# ---------------------------------------------------------------------------
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+resources:
+  limits:   { cpu: 1000m, memory: 1Gi }
+  requests: { cpu: 200m,  memory: 512Mi }
+
+# Expose the collector's own telemetry endpoint. The chart leaves this off by
+# default, so the service publishes only the receiver ports.
+#
+# These counters are the only decisive answer to "is this signal arriving?":
+#   otelcol_receiver_accepted_{spans,metric_points,log_records}
+#   otelcol_exporter_sent_* / otelcol_exporter_send_failed_*
+#
+# accepted=0 means the application is not emitting that signal; accepted>0 with
+# sent=0 means the exporter cannot deliver it. Without this port, both look
+# identical from the outside -- an empty backend. `make telemetry` reads them.
+#
+# They are also the measurement surface for the collector overhead figure the
+# P7 defence evaluation has to report.
+ports:
+  metrics:
+    enabled: true
+
+# The collector needs to read pods to attribute telemetry to them.
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "namespaces", "nodes"]
+      verbs: ["get", "watch", "list"]
+    - apiGroups: ["apps"]
+      resources: ["replicasets"]
+      verbs: ["get", "watch", "list"]
+
+presets:
+  kubernetesAttributes:
+    # Deliberately OFF. The preset injects its own k8s_attributes processor and
+    # ClusterRole. This file already declares both explicitly above and below,
+    # and having both would configure the processor twice with different
+    # settings. Since resource-attribute provenance is central to this project,
+    # the explicit version wins so the behaviour is visible in one place.
+    enabled: false
+  logsCollection:
+    enabled: false   # app logs arrive over OTLP, not by tailing files
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  # NOTE ON NAMES: this chart renamed otlp -> otlp_grpc, otlphttp -> otlp_http
+  # and k8sattributes -> k8s_attributes. It still auto-rewrites the old names
+  # and prints a deprecation notice, but that rewrite is being removed, so the
+  # new names are used here.
+  processors:
+    # Bounded memory: on a 16 GB node an unbounded collector is the first thing
+    # to OOM under a chaos-induced error storm, which loses exactly the
+    # telemetry the incident was meant to produce.
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 75
+      spike_limit_percentage: 15
+
+    batch:
+      timeout: 5s
+      send_batch_size: 1024
+
+    # Overwrite self-reported identity with cluster-derived identity.
+    k8s_attributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.deployment.name
+          - k8s.node.name
+      pod_association:
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.ip
+        - sources:
+            - from: connection
+
+  # Derive RED metrics (rate / errors / duration) per service FROM the spans.
+  #
+  # The app emits very few OTLP metrics of its own -- around a dozen points --
+  # so Prometheus has almost nothing to chart and Grafana looks empty. The span
+  # stream, by contrast, is rich. This connector turns it into per-service
+  # latency and call-rate series.
+  #
+  # `namespace` is set explicitly so the metric names are DETERMINISTIC rather
+  # than depending on the connector's default, which has changed across
+  # versions. Everything it produces is prefixed rca_ :
+  #     rca_calls_total
+  #     rca_duration_milliseconds_{bucket,sum,count}
+  # The provisioned Grafana dashboard queries exactly those names.
+  connectors:
+    spanmetrics:
+      namespace: rca
+      histogram:
+        explicit:
+          buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+      metrics_flush_interval: 15s
+
+  exporters:
+    otlp_grpc/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls: { insecure: true }
+
+    otlp_http/loki:
+      endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+      tls: { insecure: true }
+
+    prometheus_remote_write:
+      endpoint: http://prometheus-server.observability.svc.cluster.local/api/v1/write
+      tls: { insecure: true }
+      # Keep resource attributes as labels so a series can be attributed to
+      # the pod that produced it. Without this a metric loses its author,
+      # which matters here because attribution is the thesis.
+      #
+      # The collector warns that this is deprecated in favour of
+      # resource_constant_labels. That replacement's schema has not been
+      # verified against this collector version, so the working setting is
+      # kept rather than guessed at. Revisit when pinning versions.
+      resource_to_telemetry_conversion:
+        enabled: true
+
+  service:
+    pipelines:
+      traces:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        # Spans go to Tempo AND into the spanmetrics connector.
+        exporters:  [otlp_grpc/tempo, spanmetrics]
+
+      # The connector acts as a receiver for the metrics it derives.
+      metrics/spanmetrics:
+        receivers:  [spanmetrics]
+        processors: [memory_limiter, batch]
+        exporters:  [prometheus_remote_write]
+      metrics:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters:  [prometheus_remote_write]
+      logs:
+        receivers:  [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters:  [otlp_http/loki]

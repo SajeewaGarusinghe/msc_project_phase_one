@@ -1,0 +1,194 @@
+# Runbook
+
+## First run — local (free)
+
+```bash
+make wsl-memory MEM=24GB     # Windows/WSL only, then: wsl --shutdown
+make bench TARGET=local      # up -> install -> verify -> selector check
+```
+
+`make bench` is the one-shot path. The individual steps still work if you want
+to run them separately:
+
+```bash
+make local-up
+make install TARGET=local
+make verify  TARGET=local
+```
+
+## First run — cloud
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+
+# REQUIRED: lock access to your own IP
+curl -s https://checkip.amazonaws.com     # -> put this in allowed_cidr as x.x.x.x/32
+$EDITOR terraform.tfvars
+
+cd ../..
+make tf-init && make tf-plan      # READ THE PLAN
+make tf-apply
+
+# cloud-init needs ~3 minutes to install k3s after apply returns
+make kubeconfig
+make install
+make verify
+```
+
+## Immediately after the first green `make verify`
+
+Two things, in this order, before capturing anything.
+
+**1. Pin every version.** An unpinned bench is not reproducible, and a chart or
+image bump between two capture runs invalidates comparisons between them.
+
+```bash
+make pin-versions                    # resolves deployed chart versions
+
+# and the k3s image k3d actually chose
+docker inspect k3d-rca-bench-server-0 --format '{{.Config.Image}}'
+# add that to infra/local/k3d-cluster.yaml as `image: <value>`
+
+git add platform/versions.env infra/local/k3d-cluster.yaml
+git commit -m "chore: pin chart and k3s versions"
+```
+
+**2. Prove a fault is actually visible.** `make verify` proves the bench is
+wired up; it does not prove the bench can produce an incident.
+
+```bash
+make chaos-smoke EXP=01-network-delay-productcatalog
+make tunnel-grafana      # then LOOK at the last 10 minutes
+```
+
+P0 is complete when you can see the fault in metrics, traces **and** logs, and
+the loudest symptom is the **victim** rather than the root cause. If the root
+cause is the most prominent thing on the dashboard, the scenario is too easy
+and will not discriminate between real diagnosis and a prominence heuristic.
+
+## The cluster will not start after `wsl --shutdown`
+
+k3d containers restart with WSL, but k3s inside them does not always resume.
+`make local-up` waits 180s for the API, then prints the container states, what
+is holding the API port, and the k3s server log.
+
+The fix is to rebuild. Nothing in the cluster is precious -- every bit of it is
+reproducible from this repo:
+
+```bash
+make local-reset          # delete + recreate the cluster
+make bench TARGET=local   # install + verify
+```
+
+This changes once Phase 2 starts capturing snapshots. Snapshots are written to
+the repo, not into the cluster, so `local-reset` stays safe -- but check before
+assuming that of anything you add later.
+
+## When something breaks
+
+```bash
+make doctor
+```
+
+It finds every unhealthy pod and says **why** — including the reason the last
+container exited. That last part matters: `kubectl get pods` shows
+`CrashLoopBackOff` for both an out-of-memory kill and a rejected config, and
+those need opposite fixes. `doctor` reads `lastState.terminated.reason` and
+names it.
+
+`make install` runs this automatically when a helm step fails, because helm
+reports `context deadline exceeded` — which says a pod never became ready, but
+nothing about which pod or why.
+
+| What doctor reports | What it means | Fix |
+|---|---|---|
+| `OOMKilled` | memory limit too low | raise `resources.limits.memory` in that component's values file |
+| `Error`, exit code > 0 | the component rejected its config | the previous container's logs name the setting |
+| `CreateContainerConfigError` | missing ConfigMap or Secret | check the release installed fully |
+| `ImagePullBackOff` | registry or tag problem | check the pinned version exists |
+
+## Daily loop
+
+```bash
+make start                  # cloud only
+make kubeconfig             # the API address is stable, but refresh after a rebuild
+export KUBECONFIG=$PWD/kubeconfig
+
+make chaos-list
+make chaos-apply EXP=01-network-delay-productcatalog
+make tunnel-grafana         # localhost:3000, admin/admin — watch it propagate
+make chaos-delete EXP=01-network-delay-productcatalog
+
+make stop                   # ALWAYS
+```
+
+## Verifying an experiment is usable
+
+Before an incident is worth capturing, confirm in Grafana that:
+
+1. the **root-cause service** shows the fault you injected;
+2. at least one **victim** shows a symptom that is *at least as prominent*;
+3. all three signals moved — metrics, traces and logs.
+
+If the cause is the loudest thing on the dashboard, the scenario is too easy and
+will not discriminate between a real diagnosis and a prominence heuristic. Reshape
+it before capturing. See `platform/chaos/experiments/README.md`.
+
+## Reaching the UIs from Windows
+
+`make tunnel-grafana` **blocks** -- it holds the tunnel open. Leave it running
+and open the URL from another window.
+
+```bash
+make tunnel-grafana      # terminal 1, leave running -> http://localhost:3000
+```
+
+| UI | Command | URL | Login |
+|---|---|---|---|
+| Grafana | `make tunnel-grafana` | localhost:3000 | admin / admin |
+| Astronomy Shop | `make tunnel-frontend` | localhost:8080 | — |
+| Prometheus | `make tunnel-prometheus` | localhost:9090 | — |
+| Chaos dashboard | `make tunnel-chaos` | localhost:2333 | — |
+
+If Windows cannot reach the port, `kubectl` is listening on WSL's loopback and
+WSL localhost forwarding is not carrying it through. Bind to all interfaces:
+
+```bash
+BIND=0.0.0.0 make tunnel-grafana
+```
+
+That also exposes the port to your LAN, which is why it is not the default.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Pods stuck `Pending` | node out of memory | bigger `instance_type`, or raise Docker's limit locally |
+| Pods crash-loop, "too many open files" | inotify limits | cloud-init sets these; locally raise `fs.inotify.max_user_*` on the **host** |
+| Chaos experiments apply but nothing happens | wrong containerd socket | check `chaosDaemon.socketPath` matches k3s (`/run/k3s/containerd/containerd.sock`) |
+| Tempo empty, app healthy | collector endpoint wrong | check `OTEL_EXPORTER_OTLP_ENDPOINT` in the app values resolves |
+| Loki rejects planted records | timestamp outside window | `reject_old_samples: false` — already set in `loki.yaml` |
+| `make kubeconfig` times out | node stopped, or SSM agent not up | `make start`, wait 60 s, retry |
+| `make verify` fails on a B-check | trust boundary broken | **stop. Do not capture.** See [03-trust-boundary.md](03-trust-boundary.md) |
+| Node stopped itself overnight | auto-stop alarm fired | expected — `make start` |
+
+## Node shell without opening a port
+
+```bash
+aws ssm start-session --target "$(cd infra/terraform && terraform output -raw instance_id)"
+# on the node:
+bench-info
+```
+
+## Tearing down
+
+```bash
+make uninstall       # platform only, keeps the cluster
+make stop            # cloud: stop billing compute
+make tf-destroy      # cloud: remove everything including the volume
+make local-destroy   # local
+```
+
+Run `make tf-destroy` whenever the next phase does not need a cluster — a stopped
+instance still bills for its root volume.

@@ -1,0 +1,182 @@
+# ---------------------------------------------------------------------------
+# Grafana -- for human sanity checks only.
+#
+# The RCA agent does NOT use Grafana; it queries Prometheus, Tempo and Loki
+# directly. This exists so you can eyeball an incident and confirm the fault
+# actually produced the symptoms you expected before capturing it.
+#
+# No Ingress, no LoadBalancer: reach it with `make tunnel-grafana`.
+# ---------------------------------------------------------------------------
+adminUser: admin
+# Dev-only credential on a closed bench reached solely by port-forward.
+# Change it if you ever expose this beyond localhost.
+adminPassword: admin
+
+persistence:
+  enabled: false   # dashboards are provisioned from config, nothing to persist
+
+resources:
+  limits:   { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 100m, memory: 128Mi }
+
+service:
+  type: ClusterIP
+
+# Datasource UIDs are fixed so the provisioned dashboard can reference them.
+# Without a stable uid Grafana assigns a random one and every panel shows
+# "datasource not found" -- which looks exactly like having no data.
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    rca-bench:
+      json: |
+        {
+          "title": "RCA bench \u2014 fault propagation",
+          "uid": "rca-bench",
+          "schemaVersion": 39,
+          "version": 1,
+          "refresh": "10s",
+          "time": {
+            "from": "now-15m",
+            "to": "now"
+          },
+          "tags": [
+            "rca",
+            "p0"
+          ],
+          "panels": [
+            {
+              "type": "timeseries",
+              "title": "p95 latency by service  \u2014  THE panel that decides the scenario",
+              "description": "If the ROOT CAUSE is the highest line, the scenario is too easy: a prominence heuristic solves it without any causal reasoning. You want a VICTIM on top.",
+              "gridPos": {
+                "h": 11,
+                "w": 24,
+                "x": 0,
+                "y": 0
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "custom": {
+                    "lineWidth": 2,
+                    "fillOpacity": 5
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "right",
+                  "calcs": [
+                    "max",
+                    "mean"
+                  ]
+                }
+              },
+              "targets": [
+                {
+                  "expr": "histogram_quantile(0.95, sum(rate(rca_duration_milliseconds_bucket[2m])) by (le, service_name))",
+                  "legendFormat": "{{service_name}}",
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "timeseries",
+              "title": "Call rate by service",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 11
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "reqps"
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(rca_calls_total[2m])) by (service_name)",
+                  "legendFormat": "{{service_name}}",
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "timeseries",
+              "title": "Error rate by service",
+              "description": "Spans with status ERROR. A victim showing more errors than the cause is the shape this project needs.",
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 11
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "reqps"
+                },
+                "overrides": []
+              },
+              "targets": [
+                {
+                  "expr": "sum(rate(rca_calls_total{status_code=\"STATUS_CODE_ERROR\"}[2m])) by (service_name)",
+                  "legendFormat": "{{service_name}}",
+                  "refId": "A",
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  }
+                }
+              ]
+            }
+          ],
+          "templating": {
+            "list": []
+          },
+          "annotations": {
+            "list": []
+          }
+        }
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        url: http://prometheus-server.observability.svc.cluster.local
+        isDefault: true
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        url: http://tempo.observability.svc.cluster.local:3200
+      - name: Loki
+        type: loki
+        uid: loki
+        url: http://loki.observability.svc.cluster.local:3100

@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Namespaces and the trust boundary they encode.
+#
+# The separation is not cosmetic. The RCA agent under test is granted access to
+# `app` and `observability` ONLY. It must never be able to see `chaos-mesh`,
+# because an agent that can read a NetworkChaos object is reading the answer
+# rather than diagnosing the symptom -- the "injector visibility" problem
+# documented in the SREGym paper, where fault injectors run as identifiable
+# pods in the environment the agent inspects.
+#
+# See docs/03-trust-boundary.md and platform/rbac/.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    bench.msc/zone: "workload"
+    bench.msc/agent-visible: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    bench.msc/zone: "telemetry"
+    bench.msc/agent-visible: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-mesh
+  labels:
+    bench.msc/zone: "ground-truth"
+    # The single most important label in this file.
+    bench.msc/agent-visible: "false"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: research
+  labels:
+    bench.msc/zone: "harness"
+    bench.msc/agent-visible: "false"

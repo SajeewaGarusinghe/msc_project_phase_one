@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+
+project_name = "msc-rca-bench"
+region       = "us-east-1"
+
+# REQUIRED: lock access to your own IP.
+#   curl -s https://checkip.amazonaws.com
+allowed_cidr = "203.0.113.4/32"
+
+# 16 GB. Use "t3.2xlarge" for 32 GB if the stack feels tight.
+instance_type  = "t3.xlarge"
+root_volume_gb = 100
+
+# Paste the contents of ~/.ssh/id_ed25519.pub, or leave empty and use SSM only.
+ssh_public_key = ""
+enable_ssh     = true
+expose_k8s_api = true
+
+# Credit protection.
+auto_stop_enabled       = true
+auto_stop_idle_minutes  = 60
+auto_stop_cpu_threshold = 4
+
+# Set an email to arm the monthly budget alarm.
+budget_alert_email = ""
+budget_limit_usd   = 30
+
+# Spot is ~60-70% cheaper but can be reclaimed. Keep false for P2 capture runs.
+use_spot = false

@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# GROUND TRUTH:   currency is CPU-saturated
+# INTENDED VICTIM: every service that converts prices (wide fan-out)
+#
+# Also the scenario that sharpens the threat model: CPU saturation is visible
+# in kernel-maintained cgroup counters, which a non-privileged workload cannot
+# write. An adversary could only make such a claim true by ACTUALLY burning
+# CPU -- a strictly stronger capability than emitting telemetry. The proposal
+# scopes the adversary to telemetry only, and this experiment is where that
+# distinction becomes measurable.
+# ---------------------------------------------------------------------------
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-currency
+  namespace: chaos-mesh
+  annotations:
+    bench.msc/root-cause: "currency"
+    bench.msc/intended-victim: "frontend,checkout,product-catalog"
+    bench.msc/fault-class: "resource-saturation"
+spec:
+  mode: all
+  selector:
+    namespaces: [app]
+    labelSelectors:
+      app.kubernetes.io/component: currency
+  stressors:
+    cpu:
+      workers: 2
+      load: 90
+  duration: "10m"

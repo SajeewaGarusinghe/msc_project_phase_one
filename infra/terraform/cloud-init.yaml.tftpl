@@ -1,0 +1,70 @@
+#cloud-config
+# ---------------------------------------------------------------------------
+# Bench node bootstrap for ${project_name}
+#
+# Installs k3s plus the client tooling. It deliberately does NOT install the
+# application or observability stack -- that is the platform layer, applied
+# separately so it can be re-applied without rebuilding the node.
+#
+# NOTE ON TEMPLATE SYNTAX: this file is rendered by Terraform's templatefile(),
+# so any literal shell variable must be written as $${VAR}, not ${VAR}.
+# ---------------------------------------------------------------------------
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - curl
+  - jq
+  - git
+  - unzip
+  - apt-transport-https
+  - ca-certificates
+
+write_files:
+  # Raise inotify limits. k3s plus a ~15-service app plus Prometheus, Tempo and
+  # Loki opens a lot of watches; the Ubuntu defaults cause pods to crash-loop
+  # with "too many open files" in a way that is genuinely hard to diagnose.
+  - path: /etc/sysctl.d/99-k3s-bench.conf
+    content: |
+      fs.inotify.max_user_instances = 1024
+      fs.inotify.max_user_watches   = 524288
+      vm.max_map_count              = 262144
+
+  - path: /usr/local/bin/bench-info
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      echo "project:    ${project_name}"
+      echo "k3s:        $(systemctl is-active k3s 2>/dev/null || echo not-installed)"
+      echo "kubeconfig: /home/ubuntu/.kube/config"
+      echo "nodes:"
+      kubectl get nodes 2>/dev/null || echo "  (cluster not ready yet)"
+
+runcmd:
+  - sysctl --system
+
+  # ---- k3s -------------------------------------------------------------
+  # traefik and servicelb are disabled: nothing here needs an ingress or a
+  # LoadBalancer, and both would consume memory the Astronomy Shop needs.
+  # The cluster is reached by port-forward over SSM/SSH instead.
+  - |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik --disable servicelb --write-kubeconfig-mode 644" sh -
+
+  - until kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes >/dev/null 2>&1; do sleep 5; done
+
+  # ---- kubeconfig for the ubuntu user ---------------------------------
+  - mkdir -p /home/ubuntu/.kube
+  - cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+  - chown -R ubuntu:ubuntu /home/ubuntu/.kube
+  - chmod 600 /home/ubuntu/.kube/config
+  - echo 'export KUBECONFIG=/home/ubuntu/.kube/config' >> /home/ubuntu/.bashrc
+
+  # ---- client tooling --------------------------------------------------
+  - ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+  - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+  # ---- marker the verification script looks for ------------------------
+  - touch /var/lib/cloud/bench-bootstrap-complete
+
+final_message: "Bench node ready after $UPTIME seconds. Run: bench-info"

@@ -1,0 +1,120 @@
+name: ci
+
+# Terraform could not be validated in the authoring environment (no binary, no
+# credentials), so validation lives here instead. Every push gets fmt, validate
+# and lint -- which means the first `terraform apply` is not also the first
+# time the configuration has ever been parsed.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: fmt
+        run: terraform fmt -check -recursive -diff
+
+      # -backend=false: no state, no credentials, no cloud calls. This checks
+      # syntax, types, provider schemas and variable references only.
+      - name: init
+        run: terraform init -backend=false
+
+      - name: validate
+        run: terraform validate -no-color
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --init
+        working-directory: infra/terraform
+      - run: tflint --format compact
+        working-directory: infra/terraform
+
+  yaml:
+    name: yaml + shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml
+      - run: python3 scripts/lint_yaml.py
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S warning scripts/*.sh
+
+  helm:
+    name: helm template (render platform charts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      # Rendering each chart with our values catches bad value keys and bad
+      # indentation before they become a failed install on the bench.
+      - name: add repos
+        run: |
+          source platform/versions.env
+          helm repo add open-telemetry       "$REPO_OTEL"
+          helm repo add prometheus-community "$REPO_PROMETHEUS"
+          helm repo add grafana              "$REPO_GRAFANA"
+          helm repo add chaos-mesh           "$REPO_CHAOS_MESH"
+          helm repo update
+
+      - name: template
+        run: |
+          set -eu
+          render() {
+            echo "--- $1"
+            helm template "$1" "$2" -f "$3" >/dev/null
+          }
+          render prometheus     prometheus-community/prometheus            platform/observability/values/prometheus.yaml
+          render tempo          grafana/tempo                              platform/observability/values/tempo.yaml
+          render loki           grafana/loki                               platform/observability/values/loki.yaml
+          render otel-collector open-telemetry/opentelemetry-collector     platform/observability/values/otel-collector.yaml
+          render grafana        grafana/grafana                            platform/observability/values/grafana.yaml
+          render chaos-mesh     chaos-mesh/chaos-mesh                      platform/chaos/values/chaos-mesh.yaml
+          render astronomy      open-telemetry/opentelemetry-demo          platform/app/values/astronomy-shop.yaml
+
+  rbac-guard:
+    name: trust-boundary guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+
+      # Structural assertion on the single property that, if broken, silently
+      # invalidates every experiment: the agent must have no path to the fault
+      # injector. Needs no cluster, so a bad commit is caught at review time
+      # rather than discovered mid-capture. The runtime equivalent is
+      # `make verify`, which asserts the same things against a live API server.
+      - name: trust boundary
+        run: python3 scripts/check_rbac.py
