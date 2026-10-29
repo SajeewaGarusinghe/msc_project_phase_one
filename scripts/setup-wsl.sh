@@ -49,32 +49,68 @@ fi
 grn "git, make, curl present"
 
 # --- 2. Docker reachability ------------------------------------------------
-# This is the step that trips people up: Docker Desktop must have WSL
-# integration enabled FOR THIS DISTRO, not just be running on Windows.
+# Docker Desktop must have WSL integration enabled FOR THIS DISTRO. Docker
+# running on Windows is not the same as docker working inside Ubuntu, and the
+# failure mode is confusing, so this section diagnoses rather than just failing.
 echo
 echo "2. Docker"
+
+docker_diagnose() {
+  echo
+  ylw "diagnostics:"
+  printf '    docker binary : %s\n' "$(command -v docker 2>/dev/null || echo 'not on PATH')"
+  if command -v docker >/dev/null 2>&1; then
+    printf '    resolves to   : %s\n' "$(readlink -f "$(command -v docker)" 2>/dev/null || echo '?')"
+  fi
+  printf '    DOCKER_HOST   : %s\n' "${DOCKER_HOST:-(unset)}"
+  if [ -S /var/run/docker.sock ]; then
+    printf '    docker.sock   : present (%s)\n' "$(stat -c '%A %U:%G' /var/run/docker.sock 2>/dev/null)"
+  else
+    printf '    docker.sock   : MISSING at /var/run/docker.sock\n'
+  fi
+  if [ -d /mnt/wsl/docker-desktop ]; then
+    printf '    integration   : /mnt/wsl/docker-desktop present\n'
+  else
+    printf '    integration   : /mnt/wsl/docker-desktop ABSENT  <-- WSL integration is not active for this distro\n'
+  fi
+  printf '    groups        : %s\n' "$(id -nG)"
+  echo
+  ylw "actual error from 'docker info':"
+  docker info 2>&1 | grep -Ei 'cannot connect|permission denied|refused|error' | head -3 | sed 's/^/      /'
+  echo
+}
+
 if ! command -v docker >/dev/null 2>&1; then
   red "docker CLI not found in this distro."
-  red "Docker Desktop -> Settings -> Resources -> WSL Integration"
-  red "   -> enable this distro, then Apply & Restart, then reopen this shell."
+  docker_diagnose
+  red "Fix: Docker Desktop -> Settings -> Resources -> WSL Integration"
+  red "     -> enable this distro -> Apply & Restart -> CLOSE AND REOPEN this shell."
   exit 1
 fi
-docker info >/dev/null 2>&1 || {
-  red "docker CLI present but the daemon is unreachable."
-  red "Start Docker Desktop, and check WSL Integration is enabled for this distro."
-  exit 1
-}
-grn "docker daemon reachable"
 
-DOCKER_MEM=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
-DOCKER_GB=$(( DOCKER_MEM / 1024 / 1024 / 1024 ))
-if [ "$DOCKER_GB" -ge 12 ]; then
-  grn "docker sees ${DOCKER_GB} GB"
-else
-  red "docker sees only ${DOCKER_GB} GB -- the app alone needs ~6 GB."
-  red "Set memory=16GB in C:\\Users\\<you>\\.wslconfig, then: wsl --shutdown"
+if ! docker info >/dev/null 2>&1; then
+  red "docker CLI present but the daemon is unreachable."
+  docker_diagnose
+  echo "  Most likely causes, in order:"
+  echo
+  echo "   1. WSL integration is not enabled for THIS distro."
+  echo "      Docker Desktop -> Settings -> Resources -> WSL Integration"
+  echo "      -> toggle on 'Ubuntu' -> Apply & Restart."
+  echo
+  echo "   2. It is enabled, but this shell predates it."
+  echo "      The socket and PATH are wired in at shell start:"
+  echo "        exit, then from PowerShell:  wsl --shutdown"
+  echo "        reopen Ubuntu and re-run this script."
+  echo
+  echo "   3. Docker Desktop is not running on Windows. Start it and wait for"
+  echo "      the whale icon to stop animating."
+  echo
+  echo "   4. Permission denied on the socket (see diagnostics above):"
+  echo "        sudo usermod -aG docker \$USER   # then: wsl --shutdown"
+  echo
   exit 1
 fi
+grn "docker daemon reachable"
 
 # --- 3. k3d ----------------------------------------------------------------
 echo
