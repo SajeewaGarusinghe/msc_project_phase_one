@@ -10,7 +10,9 @@
 # nothing to compare and the defence appears to fail for the wrong reason.
 # ---------------------------------------------------------------------------
 tempo:
-  retention: 24h
+  # Short retention: the durable artefact of this project is the captured
+  # snapshot, not the live store. Long retention only costs memory and disk.
+  retention: 6h
 
   receivers:
     otlp:
@@ -27,9 +29,17 @@ tempo:
         rate_limit_bytes: 30000000
         burst_size_bytes: 40000000
 
+  # 100% sampling means Tempo ingests every span the app produces -- roughly
+  # 10k in a 90s window on this bench. At a 2Gi limit it was OOMKilled into
+  # CrashLoopBackOff, which surfaces only as a helm timeout.
+  #
+  # Raised rather than reducing sampling: the P7 verifier compares a callee's
+  # SERVER span against its caller's CLIENT span, so dropping either side of a
+  # pair silently breaks the defence being measured. Sampling is the one knob
+  # that must not be touched to save memory.
   resources:
-    limits:   { cpu: 1000m, memory: 2Gi }
-    requests: { cpu: 200m,  memory: 512Mi }
+    limits:   { cpu: 2000m, memory: 4Gi }
+    requests: { cpu: 200m,  memory: 1Gi }
 
 persistence:
   enabled: true

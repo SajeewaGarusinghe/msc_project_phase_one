@@ -35,6 +35,19 @@ P="$REPO_ROOT/platform"
 # Turn an empty version into no flag at all, a pinned version into --version X.
 ver_flag() { [[ -z "${1:-}" ]] && echo "" || echo "--version $1"; }
 
+# When a helm step fails -- almost always because a pod never became ready --
+# the useful information is in that pod, not in helm's "context deadline
+# exceeded". Diagnose automatically rather than making the operator go looking.
+on_fail() {
+  local rc=$?
+  [[ $rc -eq 0 ]] && return 0
+  echo
+  c_red "A helm step failed (exit $rc). Diagnosing automatically:"
+  "$REPO_ROOT/scripts/doctor.sh" || true
+  exit $rc
+}
+trap on_fail EXIT
+
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 if [[ "${WAIT:-1}" == "0" ]]; then
   WAIT_FLAGS=()

@@ -73,7 +73,7 @@ local-destroy: ## Delete the local bench entirely
 	@scripts/local-down.sh destroy
 
 # -------------------------------------------------------------------- cluster
-.PHONY: kubeconfig install verify diag telemetry pin-versions uninstall
+.PHONY: kubeconfig install verify diag doctor telemetry pin-versions uninstall bench
 kubeconfig: ## Fetch kubeconfig into ./kubeconfig
 	@scripts/kubeconfig.sh
 
@@ -83,6 +83,17 @@ install: ## Install the platform layer (observability, app, chaos, rbac)
 verify: ## P0 exit test: liveness + trust-boundary validity
 	@scripts/verify.sh
 	@scripts/chaos-check.sh
+
+bench: ## One shot: cluster up, platform installed, verified
+	@scripts/local-up.sh
+	@scripts/install-platform.sh
+	@scripts/verify.sh
+	@scripts/chaos-check.sh
+	@echo ""
+	@echo "  Bench ready. Next:  make ports   |   make chaos-smoke EXP=01-network-delay-productcatalog"
+
+doctor: ## Diagnose any unhealthy pod and say why (OOM, config, image)
+	@scripts/doctor.sh
 
 diag: ## What is the cluster doing right now? Safe to run during install.
 	@scripts/diag.sh

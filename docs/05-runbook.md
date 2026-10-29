@@ -60,6 +60,29 @@ the loudest symptom is the **victim** rather than the root cause. If the root
 cause is the most prominent thing on the dashboard, the scenario is too easy
 and will not discriminate between real diagnosis and a prominence heuristic.
 
+## When something breaks
+
+```bash
+make doctor
+```
+
+It finds every unhealthy pod and says **why** — including the reason the last
+container exited. That last part matters: `kubectl get pods` shows
+`CrashLoopBackOff` for both an out-of-memory kill and a rejected config, and
+those need opposite fixes. `doctor` reads `lastState.terminated.reason` and
+names it.
+
+`make install` runs this automatically when a helm step fails, because helm
+reports `context deadline exceeded` — which says a pod never became ready, but
+nothing about which pod or why.
+
+| What doctor reports | What it means | Fix |
+|---|---|---|
+| `OOMKilled` | memory limit too low | raise `resources.limits.memory` in that component's values file |
+| `Error`, exit code > 0 | the component rejected its config | the previous container's logs name the setting |
+| `CreateContainerConfigError` | missing ConfigMap or Secret | check the release installed fully |
+| `ImagePullBackOff` | registry or tag problem | check the pinned version exists |
+
 ## Daily loop
 
 ```bash
