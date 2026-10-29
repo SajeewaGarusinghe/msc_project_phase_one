@@ -49,17 +49,16 @@ default:
     - name: OTEL_METRICS_EXPORTER
       value: otlp
 
-  # Per-service defaults; individual services override where they need more.
-  resources:
-    limits:
-      memory: 256Mi
+  # NOTE: `resources` is NOT valid here. The chart's values.schema.json allows
+  # only: enabled, env, envOverrides, image, podSecurityContext, replicas,
+  # revisionHistoryLimit, schedulingRules, securityContext -- and rejects
+  # anything else outright. Per-service limits go under components.<name>.
+  # The chart's own per-component defaults are tuned for the documented ~6 GB.
 
   # Services emit logs over OTLP rather than to stdout, so the log record
   # carries trace_id and span_id. That linkage is what lets the verifier tie a
   # log line back to the span that supposedly produced it -- and what a forged
   # log line must therefore also carry to be plausible.
-  schedulingRules:
-    nodeSelector: {}
 
 # --- 3. load generator -----------------------------------------------------
 components:

@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
-# GROUND TRUTH:   productcatalogservice is slow (injected 300ms +/- 100ms)
-# INTENDED VICTIM: frontend and checkoutservice p99 latency
+# GROUND TRUTH:   product-catalog is slow (injected 300ms +/- 100ms)
+# INTENDED VICTIM: frontend and checkout p99 latency
 #
 # Why this one is first: it produces the clean caller/callee latency asymmetry
 # that the Phase 7 provenance verifier depends on. The caller's CLIENT span
@@ -14,8 +14,8 @@ metadata:
   name: network-delay-productcatalog
   namespace: chaos-mesh          # never in `app` -- see platform/rbac/
   annotations:
-    bench.msc/root-cause: "productcatalogservice"
-    bench.msc/intended-victim: "frontend,checkoutservice"
+    bench.msc/root-cause: "product-catalog"
+    bench.msc/intended-victim: "frontend,checkout"
     bench.msc/fault-class: "network-latency"
 spec:
   action: delay
@@ -23,7 +23,7 @@ spec:
   selector:
     namespaces: [app]
     labelSelectors:
-      app.kubernetes.io/component: productcatalogservice
+      app.kubernetes.io/component: product-catalog
   delay:
     latency: "300ms"
     correlation: "50"

@@ -34,7 +34,12 @@ clusterRole:
 
 presets:
   kubernetesAttributes:
-    enabled: true
+    # Deliberately OFF. The preset injects its own k8s_attributes processor and
+    # ClusterRole. This file already declares both explicitly above and below,
+    # and having both would configure the processor twice with different
+    # settings. Since resource-attribute provenance is central to this project,
+    # the explicit version wins so the behaviour is visible in one place.
+    enabled: false
   logsCollection:
     enabled: false   # app logs arrive over OTLP, not by tailing files
 
@@ -47,6 +52,10 @@ config:
         http:
           endpoint: 0.0.0.0:4318
 
+  # NOTE ON NAMES: this chart renamed otlp -> otlp_grpc, otlphttp -> otlp_http
+  # and k8sattributes -> k8s_attributes. It still auto-rewrites the old names
+  # and prints a deprecation notice, but that rewrite is being removed, so the
+  # new names are used here.
   processors:
     # Bounded memory: on a 16 GB node an unbounded collector is the first thing
     # to OOM under a chaos-induced error storm, which loses exactly the
@@ -61,7 +70,7 @@ config:
       send_batch_size: 1024
 
     # Overwrite self-reported identity with cluster-derived identity.
-    k8sattributes:
+    k8s_attributes:
       auth_type: serviceAccount
       passthrough: false
       extract:
@@ -79,11 +88,11 @@ config:
             - from: connection
 
   exporters:
-    otlp/tempo:
+    otlp_grpc/tempo:
       endpoint: tempo.observability.svc.cluster.local:4317
       tls: { insecure: true }
 
-    otlphttp/loki:
+    otlp_http/loki:
       endpoint: http://loki.observability.svc.cluster.local:3100/otlp
       tls: { insecure: true }
 
@@ -99,13 +108,13 @@ config:
     pipelines:
       traces:
         receivers:  [otlp]
-        processors: [memory_limiter, k8sattributes, batch]
-        exporters:  [otlp/tempo]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters:  [otlp_grpc/tempo]
       metrics:
         receivers:  [otlp]
-        processors: [memory_limiter, k8sattributes, batch]
+        processors: [memory_limiter, k8s_attributes, batch]
         exporters:  [prometheusremotewrite]
       logs:
         receivers:  [otlp]
-        processors: [memory_limiter, k8sattributes, batch]
-        exporters:  [otlphttp/loki]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters:  [otlp_http/loki]

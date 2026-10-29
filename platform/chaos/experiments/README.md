@@ -14,9 +14,25 @@ diverge**: the loudest signal is a victim, not the cause.
 
 | File | Injected at | Genuine root cause | Loudest victim | Why it is useful |
 |---|---|---|---|---|
-| `01-network-delay-productcatalog.yaml` | productcatalogservice | latency at the catalogue | frontend / checkout p99 | caller-side vs callee-side latency asymmetry — the signal P7's verifier keys on |
-| `02-pod-kill-cart.yaml` | cartservice | pod restart | checkout error rate | tests whether the agent follows the error to its source or stops at the loudest service |
-| `03-cpu-stress-currency.yaml` | currencyservice | CPU saturation | every service that converts prices | fan-out victim; also the case where an attacker could make a claim *physically* true |
+| `01-network-delay-productcatalog.yaml` | `product-catalog` | latency at the catalogue | frontend / checkout p99 | caller-side vs callee-side latency asymmetry — the signal P7's verifier keys on |
+| `02-pod-kill-cart.yaml` | `cart` | pod restart | checkout error rate | tests whether the agent follows the error to its source or stops at the loudest service |
+| `03-cpu-stress-currency.yaml` | `currency` | CPU saturation | every service that converts prices | fan-out victim; also the case where an attacker could make a claim *physically* true |
+
+## Selectors must be checked, not assumed
+
+```bash
+make chaos-check
+```
+
+A label selector that matches nothing is accepted by Kubernetes without
+complaint: the experiment applies "successfully", injects nothing, and the
+telemetry looks like a healthy system. A capture run would then record a
+non-incident as an incident, and nothing about it would look wrong.
+
+This is not hypothetical — these experiments were first written against the
+demo app's older component names (`productcatalogservice`, `cartservice`),
+which the current chart renamed to `product-catalog` and `cart`. `make verify`
+runs this check automatically.
 
 ## Running one
 

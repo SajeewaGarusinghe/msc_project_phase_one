@@ -82,6 +82,7 @@ install: ## Install the platform layer (observability, app, chaos, rbac)
 
 verify: ## P0 exit test: liveness + trust-boundary validity
 	@scripts/verify.sh
+	@scripts/chaos-check.sh
 
 pin-versions: ## Record deployed chart versions into platform/versions.env
 	@scripts/pin-versions.sh
@@ -94,7 +95,10 @@ uninstall: ## Remove the platform layer, leave the cluster
 	done
 
 # ---------------------------------------------------------------------- chaos
-.PHONY: chaos-apply chaos-delete chaos-list
+.PHONY: chaos-apply chaos-delete chaos-list chaos-check
+chaos-check: ## Verify every experiment's selector matches running pods
+	@scripts/chaos-check.sh
+
 chaos-apply: ## Inject a fault: make chaos-apply EXP=01-network-delay-productcatalog
 	@test -n "$(EXP)" || { echo "usage: make chaos-apply EXP=<name>"; exit 1; }
 	KUBECONFIG=$(KUBECONFIG_PATH) kubectl apply -f platform/chaos/experiments/$(EXP).yaml
