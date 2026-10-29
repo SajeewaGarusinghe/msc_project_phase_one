@@ -152,6 +152,45 @@ any attack that plants a prominent anomaly succeeds for an uninteresting reason.
 
 See `platform/chaos/experiments/README.md` for the per-experiment rationale.
 
+## Derived metrics, and why
+
+The demo app emits only about a dozen OTLP metric points, so Prometheus alone
+has nothing to chart. The span stream is rich. The collector therefore runs the
+**spanmetrics connector**, deriving per-service rate, error and duration series
+from spans:
+
+```
+rca_calls_total
+rca_duration_milliseconds_{bucket,sum,count}
+```
+
+The namespace is pinned to `rca_` so the names are deterministic rather than
+dependent on a connector default that has changed across versions. The
+provisioned Grafana dashboard queries exactly those names, and the datasource
+UIDs are pinned too — a randomly assigned UID makes every panel read
+"datasource not found", which looks identical to having no data.
+
+## The tooling, and what each tool refuses to do
+
+Phase 1 produced more diagnostic tooling than planned, because several bugs
+presented as healthy systems. Each of these exists to make one specific
+ambiguity impossible:
+
+| Command | Makes impossible |
+|---|---|
+| `make verify` | capturing while the trust boundary is broken |
+| `make doctor` | confusing OOMKilled with a rejected config (both show CrashLoopBackOff) |
+| `make telemetry` | confusing "the app emits nothing" with "the exporter cannot deliver" |
+| `make chaos-check` | a selector that matches zero pods passing as a working experiment |
+| `make chaos-smoke` | an injected fault left running after a crash (EXIT trap) |
+| preflight in `make install` | a schema error discovered after half the stack has upgraded |
+
+A recurring theme is worth recording for the thesis: three separate times, a
+**failed read was reported as a negative result** — a mis-typed Loki marker, a
+wrong Tempo port, and an unreachable API server that made `doctor` announce
+"no problems found". That is precisely the confusion the project's attack
+exploits, encountered accidentally in its own tooling.
+
 ## What Phase 1 deliberately does not include
 
 | Not here | Why | Where it lands |

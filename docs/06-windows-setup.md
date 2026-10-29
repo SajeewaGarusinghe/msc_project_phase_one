@@ -61,16 +61,28 @@ Download Docker Desktop for Windows, then in **Settings → General** tick
 enable integration with your Ubuntu distro.
 
 **Raise the memory limit.** This is the single most common cause of a broken
-local bench. Create or edit `C:\Users\<you>\.wslconfig`:
+local bench, and it has a command:
 
-```ini
-[wsl2]
-memory=16GB      # 12GB absolute minimum; 20GB if you have 32GB of RAM
-processors=6
-swap=8GB
+```bash
+make wsl-memory MEM=24GB       # from inside WSL, after cloning
 ```
 
-Then `wsl --shutdown` in PowerShell and reopen Ubuntu for it to take effect.
+It reads *physical* RAM from Windows (not from WSL, which knows only its own
+allocation), refuses a value that would leave Windows under 6 GB, backs up any
+existing config, and writes `C:\Users\<you>\.wslconfig`.
+
+Then in PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Reopen Ubuntu and wait for Docker Desktop to come back.
+
+**Measured requirement.** WSL's default of ~half your RAM is not enough. On a
+32 GB laptop that is ~16 GB, and this bench reached **95% of that ceiling** and
+OOMKilled Tempo. With 24 GB allocated and the app trimmed to the request path,
+it sits at about 36%.
 
 ### 3. Install the toolchain inside Ubuntu
 
@@ -123,11 +135,11 @@ Do not `cd /mnt/d/...` and run `make` there.
 
 ## Memory reality check
 
-| You have | Workable? |
-|---|---|
-| 8 GB RAM | No. Use the cloud bench. |
-| 16 GB RAM | Tight — allocate 12 GB to WSL, close everything else. Expect pressure. |
-| 32 GB RAM | Comfortable — allocate 20 GB. |
+| You have | WSL allocation | Workable? |
+|---|---|---|
+| 8 GB | — | No. Use the cloud bench. |
+| 16 GB | 12 GB | Tight. Close everything else; expect pressure. |
+| 32 GB | **24 GB** | Comfortable — this is the verified configuration. |
 
 `make local-up` fails fast with a clear message if Docker reports under 12 GB,
 rather than letting you discover it through random pod evictions an hour later.

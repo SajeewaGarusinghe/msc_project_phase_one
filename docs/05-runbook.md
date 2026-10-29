@@ -3,7 +3,14 @@
 ## First run — local (free)
 
 ```bash
-# Needs Docker with >= 12 GB allocated (20 GB comfortable)
+make wsl-memory MEM=24GB     # Windows/WSL only, then: wsl --shutdown
+make bench TARGET=local      # up -> install -> verify -> selector check
+```
+
+`make bench` is the one-shot path. The individual steps still work if you want
+to run them separately:
+
+```bash
 make local-up
 make install TARGET=local
 make verify  TARGET=local

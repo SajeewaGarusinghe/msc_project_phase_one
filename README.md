@@ -1,106 +1,162 @@
 # MSc Project — Phase 1: the RCA research bench
 
-Reproducible single-node Kubernetes bench for research into **root-cause-analysis
-agents**: a realistically instrumented microservice application, known faults
-injected into it, all three telemetry signals collected — and the fault injector
-kept **invisible** to the agent under test.
+A reproducible single-node Kubernetes bench for research into **LLM root-cause-analysis
+agents**: a realistically instrumented microservice application, known faults injected
+into it, all three telemetry signals collected — and the fault injector kept
+**invisible** to the agent under test.
 
-That last property is the research requirement. The rest is engineering.
+That last property is the research requirement. Everything else is engineering.
+
+> **Status: Phase 1 complete and verified.** `make verify` passes 14 checks on a
+> local k3d bench — all three signals arriving, and the trust boundary intact.
 
 ---
 
 ## Quick start
 
-**On Windows?** Read [docs/06-windows-setup.md](docs/06-windows-setup.md) first —
-work inside WSL2 rather than from a Windows drive (`/mnt/...` is slow and loses
-POSIX permissions).
-
-**Free, on your own machine** (needs Docker with ≥ 12 GB):
-
 ```bash
-make local-up
-make install TARGET=local
-make verify  TARGET=local
+make bench TARGET=local      # cluster up → platform installed → verified
+make ports                   # how to reach the UIs
 ```
 
-**On AWS** (see [cost control](docs/04-cost-control.md) first):
-
-```bash
-cd infra/terraform && cp terraform.tfvars.example terraform.tfvars
-curl -s https://checkip.amazonaws.com      # put this in allowed_cidr as x.x.x.x/32
-$EDITOR terraform.tfvars && cd ../..
-
-make tf-init && make tf-plan && make tf-apply
-make kubeconfig && make install && make verify
-make stop        # when you finish. always.
-```
-
-`make help` lists everything.
+On Windows, read [docs/06-windows-setup.md](docs/06-windows-setup.md) first — the repo
+must live inside WSL2, and WSL needs more RAM than its default allocation.
 
 ---
 
-## What gets built
+## What Phase 1 builds
+
+```mermaid
+flowchart TB
+    subgraph HOST["Host — 32 GB RAM, WSL2 allocated 24 GB"]
+        subgraph DOCKER["Docker Desktop (WSL2 backend)"]
+            subgraph K3D["k3d → one k3s node (pinned v1.35.5-k3s1)"]
+
+                subgraph APPNS["ns: app — agent-visible"]
+                    SVC["Astronomy Shop<br/>request-path services<br/>+ Locust load generator"]
+                end
+
+                subgraph OBSNS["ns: observability — agent-visible"]
+                    COL["OTel Collector<br/><i>gateway + k8s_attributes<br/>+ spanmetrics</i>"]
+                    PROM["Prometheus"]
+                    TEMPO["Tempo"]
+                    LOKI["Loki"]
+                    GRAF["Grafana<br/><i>humans only</i>"]
+                end
+
+                subgraph CHAOSNS["ns: chaos-mesh — NEVER agent-visible"]
+                    CM["controller + CRDs"]
+                    CD["chaos-daemon<br/><i>privileged</i>"]
+                end
+
+                subgraph RESNS["ns: research"]
+                    SA["ServiceAccount<br/>rca-agent"]
+                end
+            end
+        end
+    end
+
+    SVC -->|"OTLP 4318/4317"| COL
+    COL -->|remote-write| PROM
+    COL -->|OTLP| TEMPO
+    COL -->|OTLP| LOKI
+    PROM --> GRAF
+    TEMPO --> GRAF
+    LOKI --> GRAF
+    CD -.->|"injects faults"| SVC
+    SA -->|read-only| APPNS
+    SA -->|read-only| OBSNS
+    SA -.->|"NO ACCESS — enforced + tested"| CHAOSNS
+
+    style CHAOSNS fill:#fdecec,stroke:#c0392b,stroke-width:2px
+    style RESNS fill:#eef4fb,stroke:#2d72b8
+    style GRAF fill:#fff4e0,stroke:#ec7211
+    style COL fill:#eaf7f1,stroke:#1b9e77
+```
+
+### The telemetry path
+
+Every signal funnels through **one collector**, which is also where the Phase 7
+provenance verifier will insert itself.
 
 ```mermaid
 flowchart LR
-    subgraph N["one k3s node"]
-      direction TB
-      A["ns: app<br/>~15 services + load gen"]
-      O["ns: observability<br/>Collector · Prometheus · Tempo · Loki"]
-      C["ns: chaos-mesh<br/>fault injector"]
-      R["ns: research<br/>agent identity"]
-    end
-    A -->|OTLP| O
-    C -.->|faults| A
-    R -->|read-only| A
-    R -->|read-only| O
-    R -.->|"NO ACCESS"| C
-    style C fill:#fdecec,stroke:#c0392b,stroke-width:2px
-    style R fill:#eef4fb,stroke:#2d72b8
+    A["app service"] -->|"OTLP<br/>self-reported<br/>resource attrs"| K["k8s_attributes<br/><i>overwrites identity<br/>with what the CLUSTER knows</i>"]
+    K --> B["batch"]
+    B --> T["Tempo<br/><i>traces, 100% sampled</i>"]
+    B --> L["Loki<br/><i>logs w/ trace_id</i>"]
+    B --> P["Prometheus<br/><i>metrics</i>"]
+    B --> SM["spanmetrics connector"]
+    SM -->|"rca_calls_total<br/>rca_duration_milliseconds_*"| P
+    P --> G["Grafana dashboard<br/><i>p95 by service</i>"]
+    T --> G
+    L --> G
+
+    style K fill:#eaf7f1,stroke:#1b9e77
+    style SM fill:#fff4e0,stroke:#ec7211
 ```
 
-| Layer | What | Where |
-|---|---|---|
-| Infrastructure | one EC2 node running k3s, **or** k3d locally | `infra/` |
-| Observability | OTel Collector → Prometheus, Tempo, Loki (+ Grafana for humans) | `platform/observability/` |
-| Application | OpenTelemetry Astronomy Shop (~15 services, all three signals native) | `platform/app/` |
-| Faults | Chaos Mesh + a catalogue where the loudest symptom is a **victim**, not the cause | `platform/chaos/` |
-| Trust boundary | agent ServiceAccount with no path to the fault injector | `platform/rbac/` |
+**Why spanmetrics:** the demo app emits only a dozen OTLP metric points, so Prometheus
+alone has nothing to chart. The span stream is rich, so per-service rate/error/duration
+metrics are derived from it. The namespace is pinned to `rca_` so metric names are
+deterministic rather than dependent on a connector default.
 
-Both targets run **the same k3s**, so `platform/` applies unchanged to either.
+**Why 100% sampling:** the Phase 7 verifier compares a callee's SERVER span against its
+caller's CLIENT span. Dropping either side of a pair silently breaks the defence being
+measured. Sampling is the one knob that must not be traded for memory.
 
----
+### The trust boundary
 
-## The one thing to understand
+```mermaid
+flowchart TB
+    L1["Layer 1 — namespace isolation<br/>chaos-mesh is its own namespace"]
+    L2["Layer 2 — RBAC<br/>namespaced Roles only · no ClusterRole<br/>no chaos-mesh.org · no namespace list · no pods/exec"]
+    L3["Layer 3 — response filtering<br/><i>Phase 2: recorder strips chaos references</i>"]
+    L1 --> L2 --> L3
+    L2 --> RT["make verify<br/><i>5 fatal runtime assertions<br/>+ 1 positive control</i>"]
+    L2 --> CI["scripts/check_rbac.py<br/><i>static guard, runs in CI</i>"]
 
-```bash
-make verify
+    style L3 fill:#fafafa,stroke:#bbb,stroke-dasharray: 4 3
+    style RT fill:#eaf7f1,stroke:#1b9e77
+    style CI fill:#eaf7f1,stroke:#1b9e77
 ```
 
-runs two classes of check: **liveness** (is the bench working?) and **validity**
-(is the trust boundary intact?). The validity checks are fatal.
-
-An agent that can read a `NetworkChaos` object is reading the answer key, not
-diagnosing an incident. Published work found that **8 of 18 mitigation problems in
-one benchmark could be "solved" by a pod-restart loop** that never diagnoses
-anything, because the injector was visible. Any capture run performed while
-`make verify` fails should be **discarded**.
+An agent that can read a `NetworkChaos` object is reading the answer key, not diagnosing
+an incident. Published work found **8 of 18 mitigation problems in one benchmark were
+"solvable" by a pod-restart loop** because the injector was visible. Any capture run made
+while `make verify` fails should be discarded.
 
 See [docs/03-trust-boundary.md](docs/03-trust-boundary.md).
 
 ---
 
-## Documentation
+## Commands
 
-| Doc | Read it when |
+| Lifecycle | |
 |---|---|
-| [Platform choice](docs/01-platform-choice.md) | "AWS free tier, GCP, or minikube?" — answered, with costs |
-| [Architecture](docs/02-architecture.md) | understanding the shape of the bench |
-| [Trust boundary](docs/03-trust-boundary.md) | **before touching `platform/rbac/`** |
-| [Cost control](docs/04-cost-control.md) | before leaving anything running |
-| [Runbook](docs/05-runbook.md) | day-to-day operation and troubleshooting |
-| [Port forwarding](docs/07-port-forwarding.md) | reaching the UIs, manually or via `make ports` |
-| [Windows setup](docs/06-windows-setup.md) | **running locally on Windows — read before cloning to a drive** |
+| `make bench TARGET=local` | one shot: up → install → verify |
+| `make local-up` / `local-stop` / `local-destroy` | cluster lifecycle |
+| `make local-reset` | delete + recreate (when k3s will not resume) |
+| `make wsl-memory MEM=24GB` | raise WSL's RAM allocation, then `wsl --shutdown` |
+
+| Verify & diagnose | |
+|---|---|
+| `make verify` | **the gate** — liveness, trust boundary, selectors |
+| `make doctor` | find unhealthy pods and say *why* (OOM vs config vs image) |
+| `make diag` | what the cluster is doing right now; safe during install |
+| `make telemetry` | per-signal collector counters — is each signal arriving and leaving? |
+
+| Faults | |
+|---|---|
+| `make chaos-list` | available experiments and anything running |
+| `make chaos-check` | assert every selector matches real pods |
+| `make chaos-smoke EXP=…` | inject, measure p95 before/after, always clean up |
+| `make chaos-apply` / `chaos-delete EXP=…` | manual control |
+
+| Access | |
+|---|---|
+| `make ports` | print the raw `kubectl port-forward` commands |
+| `make tunnel-grafana` | Grafana on :3000 (admin/admin) — `BIND=0.0.0.0` on WSL |
 
 ---
 
@@ -108,35 +164,54 @@ See [docs/03-trust-boundary.md](docs/03-trust-boundary.md).
 
 ```
 infra/
-  terraform/     AWS: VPC, one EC2 node, k3s via cloud-init, cost guardrails
-  local/         k3d cluster definition (same k3s, zero cost)
+  terraform/      AWS: VPC + one EC2 node running k3s, cost guardrails
+  local/          k3d cluster definition — same k3s, zero cost
 platform/
-  namespaces.yaml      the trust zones
-  observability/       collector + backends (Helm values)
-  app/                 Astronomy Shop (Helm values)
-  chaos/               Chaos Mesh + fault catalogue
-  rbac/                agent identity — the research-critical file
-  versions.env         chart version pins (run `make pin-versions` after first install)
-scripts/         bench lifecycle, kubeconfig, tunnels, install, verify
-docs/            ADRs, architecture, runbook
+  namespaces.yaml       the trust zones
+  observability/        collector + backends + provisioned dashboard
+  app/                  Astronomy Shop, trimmed to the request path
+  chaos/                Chaos Mesh + fault catalogue
+  rbac/                 the agent identity — the research-critical file
+  versions.env          PINNED chart versions
+scripts/          lifecycle, verification, diagnosis
+docs/             ADRs, architecture, runbook
 ```
 
 ---
 
-## Status and caveats
+## Reproducibility
 
-- **Terraform has not been applied.** It was authored without cloud credentials or
-  a Terraform binary available. CI runs `fmt`, `validate` and `tflint` on every
-  push; read the first `terraform plan` carefully regardless.
-- **Chart versions are unpinned** until you run `make pin-versions` after a
-  successful install. Pin and commit before capturing any incident — a chart bump
-  between two capture runs invalidates comparisons between them.
-- **Helm values keys drift between chart major versions.** `make show-app-values`
-  prints the chart's own defaults so you can diff the keys used here against them.
-- Prices quoted in the docs are approximate and change. Verify before relying on them.
+Everything is pinned: k3s image (`v1.35.5-k3s1`) and all seven chart versions in
+`platform/versions.env`. A chart or image bump between two capture runs would invalidate
+comparisons between them, so upgrades are deliberate commits — `make pin-versions`,
+review the diff, commit.
 
-## Next phase
+The app is trimmed to the services on the request path. Eight demo components are
+disabled (chatbot, firepit, telemetry-docs, flagd-ui, mcp, opamp-server, accounting,
+fraud-detection). **Kafka is kept deliberately**: checkout publishes to it, and removing
+it would make checkout log publish errors continuously, polluting the clean baseline that
+every attack measurement is compared against.
 
-Phase 2 adds the **recorder** and **mock tool server** — freezing each incident into
-a snapshot so agents can be replayed against byte-identical evidence. That is the
-keystone the attack and defence phases both depend on.
+---
+
+## What Phase 1 deliberately excludes
+
+| Not here | Why | Lands in |
+|---|---|---|
+| Recorder / snapshot store | needs the agent tool surface frozen first | P2 |
+| Mock tool server | depends on the recorder's format | P2 |
+| eBPF observer (OBI) | second independent source for the defence | P7 |
+| Provenance verifier | the contribution; needs captured data to evaluate | P7 |
+
+---
+
+## Next
+
+**Phase 2 — the recorder and mock tool server.** Freezing each incident into a snapshot
+so agents replay against byte-identical evidence. That is the keystone the attack and
+defence phases both depend on.
+
+The one judgement still open in Phase 1: run `make chaos-smoke`, open the Grafana
+dashboard, and confirm the **victim** services top the p95 panel rather than the root
+cause. If the cause is loudest, a prominence heuristic solves the scenario and a later
+attack would succeed for an uninteresting reason.
