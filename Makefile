@@ -64,7 +64,9 @@ status: ## Is the node running and burning credits?
 	@scripts/bench.sh status
 
 # ------------------------------------------------------------------ local k3d
-.PHONY: local-up local-stop local-destroy
+.PHONY: local-up local-stop local-destroy wsl-memory
+wsl-memory: ## Raise WSL's RAM allocation (MEM=24GB CPUS=8)
+	@scripts/wsl-memory.sh $(MEM) $(CPUS)
 local-up:      ## Create/start the free local k3d bench
 	@scripts/local-up.sh
 local-stop:    ## Stop the local bench, keep its state

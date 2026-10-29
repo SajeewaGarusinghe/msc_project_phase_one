@@ -71,6 +71,28 @@ kubectl describe node 2>/dev/null \
   | grep -A6 'Allocated resources' | sed 's/^/  /'
 
 echo
+c_ylw "=== memory budget ==="
+# Over-commitment is the root cause behind most OOMKills here, and it is
+# invisible until something dies. 95% of the ceiling means the next pod to
+# spike gets killed -- and which pod that is, is luck.
+kubectl describe node 2>/dev/null | awk '
+  /Allocated resources/ {inres=1}
+  inres && /^  memory/ {print "  node memory  requests="$2" limits="$3; inres=0}
+'
+PCT="$(kubectl describe node 2>/dev/null | grep -A6 'Allocated resources' \
+  | grep -oE 'memory[[:space:]]+[0-9]+Mi \(([0-9]+)%\)[[:space:]]+[0-9]+Mi \(([0-9]+)%\)' \
+  | grep -oE '\(([0-9]+)%\)' | tail -1 | tr -d '()%')"
+if [[ -n "$PCT" ]] && (( PCT >= 90 )); then
+  c_red "  memory limits are at ${PCT}% of the node -- OOMKills are expected here."
+  echo  "    On WSL the cheapest fix is to give WSL more of the machine:"
+  echo  "        make wsl-memory MEM=24GB     (then: wsl --shutdown)"
+  echo  "    Otherwise disable more demo components in"
+  echo  "        platform/app/values/astronomy-shop.yaml"
+elif [[ -n "$PCT" ]]; then
+  c_grn "  memory limits at ${PCT}% of the node"
+fi
+
+echo
 c_ylw "=== recent warning events ==="
 kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp --no-headers 2>/dev/null \
   | grep -Ev 'hides previous definition' | tail -10 | sed 's/^/  /'

@@ -38,7 +38,7 @@ tempo:
   # pair silently breaks the defence being measured. Sampling is the one knob
   # that must not be touched to save memory.
   resources:
-    limits:   { cpu: 2000m, memory: 4Gi }
+    limits:   { cpu: 2000m, memory: 3Gi }
     requests: { cpu: 200m,  memory: 1Gi }
 
 persistence:

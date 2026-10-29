@@ -72,8 +72,26 @@ default:
   # globally would point the gRPC components' protocol at the wrong port.
   # Each component's own default is already correct for the port it uses.
 
-# --- 3. load generator -----------------------------------------------------
+# --- 3. trim what this project does not use --------------------------------
+#
+# The node hit 95% of its memory ceiling and OOMKilled Tempo. These components
+# are not on the request path the RCA experiments reason about, so none of them
+# changes the trace graph, and dropping them buys back the headroom.
+#
+# KEPT deliberately: kafka, because checkout publishes to it and removing it
+# would make checkout log publish errors continuously -- polluting the clean
+# baseline that every attack measurement is compared against.
 components:
+  chatbot:        { enabled: false }   # LLM demo, large image, off the request path
+  firepit:        { enabled: false }   # continuous profiling UI
+  telemetry-docs: { enabled: false }   # documentation site
+  flagd-ui:       { enabled: false }   # UI for flagd; flagd itself stays
+  mcp:            { enabled: false }   # MCP server demo
+  opamp-server:   { enabled: false }   # agent management demo
+  accounting:     { enabled: false }   # kafka CONSUMER, not on the request path
+  fraud-detection: { enabled: false }  # kafka CONSUMER; was already crash-looping
+
+
   load-generator:
     enabled: true
     resources:
