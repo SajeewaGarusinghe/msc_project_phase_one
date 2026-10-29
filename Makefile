@@ -101,9 +101,12 @@ uninstall: ## Remove the platform layer, leave the cluster
 	done
 
 # ---------------------------------------------------------------------- chaos
-.PHONY: chaos-apply chaos-delete chaos-list chaos-check
+.PHONY: chaos-apply chaos-delete chaos-list chaos-check chaos-smoke
 chaos-check: ## Verify every experiment's selector matches running pods
 	@scripts/chaos-check.sh
+
+chaos-smoke: ## P0 exit test: inject a fault and confirm it is visible
+	@scripts/smoke-chaos.sh $(EXP)
 
 chaos-apply: ## Inject a fault: make chaos-apply EXP=01-network-delay-productcatalog
 	@test -n "$(EXP)" || { echo "usage: make chaos-apply EXP=<name>"; exit 1; }

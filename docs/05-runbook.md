@@ -29,12 +29,36 @@ make install
 make verify
 ```
 
-Then pin the chart versions so the bench is reproducible:
+## Immediately after the first green `make verify`
+
+Two things, in this order, before capturing anything.
+
+**1. Pin every version.** An unpinned bench is not reproducible, and a chart or
+image bump between two capture runs invalidates comparisons between them.
 
 ```bash
-make pin-versions
-git add platform/versions.env && git commit -m "chore: pin chart versions"
+make pin-versions                    # resolves deployed chart versions
+
+# and the k3s image k3d actually chose
+docker inspect k3d-rca-bench-server-0 --format '{{.Config.Image}}'
+# add that to infra/local/k3d-cluster.yaml as `image: <value>`
+
+git add platform/versions.env infra/local/k3d-cluster.yaml
+git commit -m "chore: pin chart and k3s versions"
 ```
+
+**2. Prove a fault is actually visible.** `make verify` proves the bench is
+wired up; it does not prove the bench can produce an incident.
+
+```bash
+make chaos-smoke EXP=01-network-delay-productcatalog
+make tunnel-grafana      # then LOOK at the last 10 minutes
+```
+
+P0 is complete when you can see the fault in metrics, traces **and** logs, and
+the loudest symptom is the **victim** rather than the root cause. If the root
+cause is the most prominent thing on the dashboard, the scenario is too easy
+and will not discriminate between real diagnosis and a prominence heuristic.
 
 ## Daily loop
 
