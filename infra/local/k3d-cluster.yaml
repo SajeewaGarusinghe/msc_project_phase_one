@@ -30,7 +30,19 @@ metadata:
 servers: 1
 agents: 0          # single node, matching the cloud bench exactly
 
-image: docker.io/rancher/k3s:v1.31.5-k3s1
+# NO image pin yet, deliberately.
+#
+# k3d ships a default k3s image that is tested against the k3d release you have
+# installed, so leaving this unset is the safest first run. Pinning a tag that
+# turns out not to exist fails the cluster create with an image-pull error that
+# looks like a network problem.
+#
+# AFTER your first successful `make local-up`, record what it actually used:
+#
+#     docker inspect k3d-rca-bench-server-0 --format '{{.Config.Image}}'
+#
+# and add it back here as `image: <that value>`. From then on the local bench
+# is reproducible, for the same reason platform/versions.env exists.
 
 options:
   k3s:
@@ -45,11 +57,16 @@ options:
     updateDefaultKubeconfig: false   # we write ./kubeconfig explicitly
     switchCurrentContext: false
 
-ports:
-  # Only the k3s API is published. Everything else is reached by port-forward,
-  # exactly as on the cloud bench, so the workflow is identical.
-  - port: 6443:6443
-    nodeFilters: [server:0]
+# The Kubernetes API is published through k3d's own loadbalancer rather than a
+# raw port mapping on the server node. 6445 avoids colliding with anything that
+# expects a standard 6443, and binding to 127.0.0.1 keeps the API off the LAN.
+#
+# Nothing else is published: the application and the observability UIs are all
+# reached with `make tunnel-*`, exactly as on the cloud bench, so the workflow
+# is identical on both targets.
+kubeAPI:
+  hostIP: "127.0.0.1"
+  hostPort: "6445"
 
 # NO volumes are mounted, and that is deliberate.
 #
