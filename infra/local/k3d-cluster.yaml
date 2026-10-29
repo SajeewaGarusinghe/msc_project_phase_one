@@ -30,19 +30,17 @@ metadata:
 servers: 1
 agents: 0          # single node, matching the cloud bench exactly
 
-# NO image pin yet, deliberately.
-#
-# k3d ships a default k3s image that is tested against the k3d release you have
-# installed, so leaving this unset is the safest first run. Pinning a tag that
-# turns out not to exist fails the cluster create with an image-pull error that
-# looks like a network problem.
-#
-# AFTER your first successful `make local-up`, record what it actually used:
+# Pinned from what k3d v5.9.0 actually chose on the first successful create,
+# read back with:
 #
 #     docker inspect k3d-rca-bench-server-0 --format '{{.Config.Image}}'
 #
-# and add it back here as `image: <that value>`. From then on the local bench
-# is reproducible, for the same reason platform/versions.env exists.
+# Pinned rather than guessed: an earlier revision of this file carried a
+# hand-written tag that did not exist, which fails `k3d cluster create` with a
+# pull error that reads like a network fault. The bench is now reproducible
+# for the same reason platform/versions.env is pinned -- a k3s bump between
+# two capture runs would invalidate comparisons between them.
+image: docker.io/rancher/k3s:v1.35.5-k3s1
 
 options:
   k3s:

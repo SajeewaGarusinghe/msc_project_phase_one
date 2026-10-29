@@ -22,15 +22,23 @@ F="$REPO_ROOT/platform/chaos/experiments/${EXP}.yaml"
 
 WINDOW="${WINDOW:-90}"
 
-q_prom() {
+# Count traces SLOWER than a threshold inside an explicit time window.
+#
+# An earlier revision counted traces with limit=20 and compared 20 to 20, and
+# watched pod restarts -- which cannot move for a latency fault. Neither could
+# ever show a network delay. Latency is the signal this fault produces, so
+# latency is what has to be measured, over a bounded window so "before" does
+# not include the whole preceding hour.
+SLOW_MS="${SLOW_MS:-250}"
+count_slow() {   # count_slow <start-unix> <end-unix>
   kubectl get --raw \
-    "/api/v1/namespaces/observability/services/prometheus-server:80/proxy/api/v1/query?query=$1" 2>/dev/null || true
+    "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&minDuration=${SLOW_MS}ms&limit=100" \
+    2>/dev/null | grep -o '"traceID"' | wc -l
 }
-# Total spans Tempo has ingested is a cheap proxy for "is traffic flowing".
-count_traces() {
+count_any() {    # count_any <start-unix> <end-unix>
   kubectl get --raw \
-    '/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?limit=20' 2>/dev/null \
-    | grep -o '"traceID"' | wc -l
+    "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&limit=100" \
+    2>/dev/null | grep -o '"traceID"' | wc -l
 }
 
 ROOT="$(grep -oP 'bench.msc/root-cause:\s*"\K[^"]+' "$F" || echo '?')"
@@ -43,11 +51,17 @@ echo   "  intended victim: $VICTIM"
 echo   "  window         : ${WINDOW}s"
 
 echo
-c_ylw "1. Baseline (before injection)"
-B_TRACES="$(count_traces)"
+c_ylw "1. Baseline (the ${WINDOW}s BEFORE injection)"
+B_END=$(date +%s); B_START=$(( B_END - WINDOW ))
+B_SLOW="$(count_slow "$B_START" "$B_END")"
+B_ANY="$(count_any "$B_START" "$B_END")"
 B_PODS="$(kubectl get pods -n app --no-headers 2>/dev/null | awk '{s+=$4} END{print s+0}')"
-echo "  traces in last search page : $B_TRACES"
-echo "  total pod restarts in app  : $B_PODS"
+printf "  traces: %s total, %s slower than %sms\n" "$B_ANY" "$B_SLOW" "$SLOW_MS"
+echo   "  pod restarts in app: $B_PODS"
+if [[ "$B_ANY" -eq 0 ]]; then
+  c_red "  No traffic at all. The load generator is not driving the app --"
+  c_red "  nothing can be measured. Check: kubectl get pods -n app | grep load"
+fi
 
 echo
 c_ylw "2. Injecting"
@@ -66,23 +80,39 @@ else
   c_red "  run 'make chaos-check' and inspect: kubectl describe $KIND $NAME -n chaos-mesh"
 fi
 
+INJECT_AT=$(date +%s)
 echo
 c_ylw "3. Waiting ${WINDOW}s for symptoms to propagate"
 sleep "$WINDOW"
 
 echo
-c_ylw "4. After injection"
-A_TRACES="$(count_traces)"
+c_ylw "4. After injection (the ${WINDOW}s SINCE)"
+A_END=$(date +%s)
+A_SLOW="$(count_slow "$INJECT_AT" "$A_END")"
+A_ANY="$(count_any "$INJECT_AT" "$A_END")"
 A_PODS="$(kubectl get pods -n app --no-headers 2>/dev/null | awk '{s+=$4} END{print s+0}')"
-echo "  traces in last search page : $A_TRACES"
-echo "  total pod restarts in app  : $A_PODS  (was $B_PODS)"
+printf "  traces: %s total, %s slower than %sms\n" "$A_ANY" "$A_SLOW" "$SLOW_MS"
+echo   "  pod restarts in app: $A_PODS  (was $B_PODS)"
 
 echo
-c_ylw "5. Signals"
-ERRS="$(q_prom 'sum(rate(traces_spanmetrics_calls_total%7Bstatus_code%3D%22STATUS_CODE_ERROR%22%7D%5B2m%5D))' | head -c 200)"
-echo "  prometheus error-rate query: ${ERRS:-(no spanmetrics -- expected unless enabled)}"
+c_ylw "5. Verdict"
+VISIBLE=0
+if [[ "$A_SLOW" -gt "$B_SLOW" ]]; then
+  c_grn "  LATENCY: slow traces rose $B_SLOW -> $A_SLOW   (fault is visible)"
+  VISIBLE=1
+else
+  c_ylw "  LATENCY: slow traces $B_SLOW -> $A_SLOW (no rise)"
+fi
 if [[ "$A_PODS" -gt "$B_PODS" ]]; then
-  c_grn "  pod restarts INCREASED -- availability fault visible"
+  c_grn "  AVAILABILITY: pod restarts rose $B_PODS -> $A_PODS"
+  VISIBLE=1
+fi
+if [[ "$VISIBLE" -eq 0 ]]; then
+  c_red "  No measurable change."
+  echo  "    - a latency fault needs minDuration BELOW the injected delay;"
+  echo  "      this run used SLOW_MS=$SLOW_MS. Try: SLOW_MS=150 make chaos-smoke EXP=$EXP"
+  echo  "    - or the delay is not reaching the caller. Inspect:"
+  echo  "      kubectl describe $KIND $NAME -n chaos-mesh"
 fi
 
 echo
