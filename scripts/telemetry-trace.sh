@@ -64,12 +64,18 @@ if [ -n "$COLSVC" ]; then
       A=$(echo "$M" | grep -E "^otelcol_receiver_accepted_${sig}(_total)?\{" | awk '{s+=$NF} END{printf "%d", s+0}')
       S=$(echo "$M" | grep -E "^otelcol_exporter_sent_${sig}(_total)?\{"     | awk '{s+=$NF} END{printf "%d", s+0}')
       F=$(echo "$M" | grep -E "^otelcol_exporter_send_failed_${sig}(_total)?\{" | awk '{s+=$NF} END{printf "%d", s+0}')
-      printf "     %-14s accepted=%-10s sent=%-10s failed=%s\n" "$sig" "$A" "$S" "$F"
+      R=$(echo "$M" | grep -E "^otelcol_(processor_dropped|receiver_refused)_${sig}(_total)?\{" | awk '{s+=$NF} END{printf "%d", s+0}')
+      printf "     %-14s accepted=%-9s sent=%-9s failed=%-6s dropped/refused=%s\n" "$sig" "$A" "$S" "$F" "$R"
     done
     echo
     c_dim "     accepted=0        -> the app is not emitting this signal"
     c_dim "     accepted>0 sent=0 -> the exporter cannot deliver it"
     c_dim "     failed>0          -> the backend is rejecting it"
+    c_dim "     dropped/refused>0 -> memory_limiter is shedding load; raise the"
+    c_dim "                          collector memory limit if this keeps growing"
+    echo
+    c_dim "     A small accepted-vs-sent gap is normal: records sit in the batch"
+    c_dim "     processor between the two counters. A gap that grows is not."
   else
     c_red "     could not read collector metrics on :8888"
   fi

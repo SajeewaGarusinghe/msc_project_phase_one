@@ -65,30 +65,40 @@ probe() {
 }
 
 # Report "could not reach" and "reached but empty" as DIFFERENT outcomes.
+#
+# The marker strings are per-API and easy to get wrong -- an earlier revision
+# checked Loki's /labels response for "values" when that endpoint actually
+# returns {"status":"success","data":[...]}, and reported a perfectly healthy
+# Loki as empty. Each check therefore carries BOTH a positive marker and the
+# exact body that means "reached it, and it is empty", so a mismatched marker
+# shows up as an unrecognised response rather than a false alarm.
 check_backend() {
-  local label="$1" ns="$2" svc="$3" port="$4" path="$5" marker="$6" hint="$7"
-  local body rc
-  # `|| true` so a failed probe cannot abort the whole script under `set -e`,
-  # and a bare `cond && assign` is avoided for the same reason.
+  local label="$1" ns="$2" svc="$3" port="$4" path="$5" marker="$6" empty="$7" hint="$8"
+  local body
   body="$(probe "$ns" "$svc" "$port" "$path" || true)"
-  local rc=0
-  if [[ -z "$body" ]]; then rc=1; fi
-  if [[ $rc -ne 0 || -z "$body" ]]; then
+  if [[ -z "$body" ]]; then
     bad "$label -- PROBE FAILED (could not reach svc/$svc:$port in $ns)"
-    echo "          This is a probe problem, not necessarily a data problem."
+    echo "          A probe problem, not necessarily a data problem."
     echo "          Check the service exists:  kubectl get svc -n $ns"
+    return
+  fi
+  if [[ -n "$empty" && "$body" == *"$empty"* ]]; then
+    bad "$label reached, but holds NO data"
+    echo "          $hint"
     return
   fi
   if [[ "$body" == *"$marker"* ]]; then
     ok "$label HAS data"
   else
-    bad "$label reached, but holds NO data -- the app is exporting nowhere"
-    echo "          $hint"
+    bad "$label returned a response this check does not recognise"
+    echo "          expected to find: $marker"
+    echo "          got: $(echo "$body" | head -c 160)"
   fi
 }
 
-check_backend "Tempo"  observability tempo 3200 "/api/search?limit=1" "traceID" \
-  "kubectl get deploy -n app -o name | head -1 | xargs -I{} kubectl exec -n app {} -- env | grep OTEL_EXPORTER"
+check_backend "Tempo" observability tempo 3200 "/api/search?limit=1" \
+  'traceID' '"traces":[]' \
+  "No traces yet. Give the load generator a minute, or drive traffic with 'make tunnel-frontend'."
 
 PROM="$(probe observability prometheus-server 80 "/api/v1/query?query=count(up)" || true)"
 if [[ "$PROM" == *'"status":"success"'* ]]; then
@@ -97,8 +107,9 @@ else
   bad "Prometheus query failed"
 fi
 
-check_backend "Loki" observability loki 3100 "/loki/api/v1/labels" '"values"' \
-  "Logs reach Loki via the collector's otlp_http exporter -- check the collector logs."
+check_backend "Loki" observability loki 3100 "/loki/api/v1/labels" \
+  '"status":"success"' '"data":[]' \
+  "Run 'make telemetry' and read log_records: accepted=0 means the app emits none."
 
 echo
 c_ylw "B. VALIDITY -- the trust boundary (fatal if violated)"
