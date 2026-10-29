@@ -21,6 +21,23 @@ resources:
   limits:   { cpu: 1000m, memory: 1Gi }
   requests: { cpu: 200m,  memory: 512Mi }
 
+# Expose the collector's own telemetry endpoint. The chart leaves this off by
+# default, so the service publishes only the receiver ports.
+#
+# These counters are the only decisive answer to "is this signal arriving?":
+#   otelcol_receiver_accepted_{spans,metric_points,log_records}
+#   otelcol_exporter_sent_* / otelcol_exporter_send_failed_*
+#
+# accepted=0 means the application is not emitting that signal; accepted>0 with
+# sent=0 means the exporter cannot deliver it. Without this port, both look
+# identical from the outside -- an empty backend. `make telemetry` reads them.
+#
+# They are also the measurement surface for the collector overhead figure the
+# P7 defence evaluation has to report.
+ports:
+  metrics:
+    enabled: true
+
 # The collector needs to read pods to attribute telemetry to them.
 clusterRole:
   create: true

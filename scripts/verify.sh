@@ -28,12 +28,25 @@ for ns in app observability chaos-mesh research; do
 done
 
 # Every pod either Running or Completed (jobs).
+# Terminating pods are ignored: a rollout seconds earlier is not a fault, and
+# flagging it sends you debugging a pod that is already gone.
 NOTREADY="$(kubectl get pods -A --no-headers 2>/dev/null \
-  | awk '$4!="Running" && $4!="Completed" {print $1"/"$2" ("$4")"}' || true)"
+  | awk '$4!="Running" && $4!="Completed" && $4!="Terminating" {print $1"/"$2" ("$4")"}' || true)"
 if [[ -z "$NOTREADY" ]]; then
   ok "all pods Running/Completed"
 else
-  bad "pods not ready:"; echo "$NOTREADY" | sed 's/^/          /'
+  bad "pods not ready:"
+  echo "$NOTREADY" | sed 's/^/          /'
+  # Print WHY, rather than making you go and ask. This is the information you
+  # would fetch next in every single case.
+  while read -r line; do
+    [[ -z "$line" ]] && continue
+    NS="${line%%/*}"; REST="${line#*/}"; POD="${REST%% *}"
+    echo "          --- $NS/$POD: last container state ---"
+    kubectl get pod "$POD" -n "$NS" -o jsonpath='{range .status.containerStatuses[*]}            {.name}: {.state}{"\n"}{end}' 2>/dev/null | head -6
+    echo "          --- $NS/$POD: last log lines ---"
+    kubectl logs "$POD" -n "$NS" --tail=8 --all-containers 2>&1 | sed 's/^/            /' | head -10
+  done <<< "$NOTREADY"
 fi
 
 # The three signals must actually be ARRIVING, not merely be queryable. An
