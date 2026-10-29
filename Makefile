@@ -73,7 +73,7 @@ local-destroy: ## Delete the local bench entirely
 	@scripts/local-down.sh destroy
 
 # -------------------------------------------------------------------- cluster
-.PHONY: kubeconfig install verify diag pin-versions uninstall
+.PHONY: kubeconfig install verify diag telemetry pin-versions uninstall
 kubeconfig: ## Fetch kubeconfig into ./kubeconfig
 	@scripts/kubeconfig.sh
 
@@ -86,6 +86,9 @@ verify: ## P0 exit test: liveness + trust-boundary validity
 
 diag: ## What is the cluster doing right now? Safe to run during install.
 	@scripts/diag.sh
+
+telemetry: ## Trace the telemetry path and show exactly where it stops
+	@scripts/telemetry-trace.sh
 
 pin-versions: ## Record deployed chart versions into platform/versions.env
 	@scripts/pin-versions.sh

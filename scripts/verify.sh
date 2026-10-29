@@ -40,33 +40,48 @@ fi
 # empty backend is the most common silent failure: the stack is "up" but the
 # app is exporting nowhere, so every later phase captures nothing.
 #
-# This also settles, empirically, whether the demo chart's duplicated
-# OTEL_EXPORTER_OTLP_* env entries resolved in our favour. Reasoning about
-# which definition wins is less reliable than asking the backend.
+# Probes go through the API server's service proxy rather than `kubectl exec`.
+# exec depends on the workload KIND (Deployment vs StatefulSet) and on the
+# container image shipping a shell and wget -- neither is guaranteed, and when
+# either is wrong the failure is indistinguishable from "no data". The proxy
+# needs nothing inside the container.
+probe() {
+  # probe <ns> <svc> <port> <path>  -> body on stdout, non-zero if unreachable
+  kubectl get --raw \
+    "/api/v1/namespaces/$1/services/$2:$3/proxy$4" 2>/dev/null
+}
 
-TRACES="$(kubectl exec -n observability deploy/tempo -- \
-  wget -qO- 'http://localhost:3100/api/search?limit=1' 2>/dev/null || true)"
-if [[ "$TRACES" == *traceID* || "$TRACES" == *traceId* ]]; then
-  ok "Tempo HAS traces (the OTLP path works end to end)"
-elif [[ -n "$TRACES" ]]; then
-  bad "Tempo responds but holds NO traces -- the app is exporting nowhere."
-  echo "          Check OTEL_EXPORTER_OTLP_ENDPOINT resolves to the collector:"
-  echo "          kubectl exec -n app deploy/astronomy-frontend -- env | grep OTEL_EXPORTER"
+# Report "could not reach" and "reached but empty" as DIFFERENT outcomes.
+check_backend() {
+  local label="$1" ns="$2" svc="$3" port="$4" path="$5" marker="$6" hint="$7"
+  local body rc
+  body="$(probe "$ns" "$svc" "$port" "$path")"; rc=$?
+  if [[ $rc -ne 0 || -z "$body" ]]; then
+    bad "$label -- PROBE FAILED (could not reach svc/$svc:$port in $ns)"
+    echo "          This is a probe problem, not necessarily a data problem."
+    echo "          Check the service exists:  kubectl get svc -n $ns"
+    return
+  fi
+  if [[ "$body" == *"$marker"* ]]; then
+    ok "$label HAS data"
+  else
+    bad "$label reached, but holds NO data -- the app is exporting nowhere"
+    echo "          $hint"
+  fi
+}
+
+check_backend "Tempo"  observability tempo 3100 "/api/search?limit=1" "traceID" \
+  "kubectl get deploy -n app -o name | head -1 | xargs -I{} kubectl exec -n app {} -- env | grep OTEL_EXPORTER"
+
+PROM="$(probe observability prometheus-server 80 "/api/v1/query?query=count(up)")"
+if [[ "$PROM" == *'"status":"success"'* ]]; then
+  ok "Prometheus responding"
 else
-  bad "Tempo returned nothing"
+  bad "Prometheus query failed"
 fi
 
-PROM_UP="$(kubectl exec -n observability deploy/prometheus-server -c prometheus-server -- \
-  wget -qO- 'http://localhost:9090/api/v1/query?query=up' 2>/dev/null | head -c 80 || true)"
-[[ "$PROM_UP" == *'"status":"success"'* ]] && ok "Prometheus responding" || bad "Prometheus query failed"
-
-LOKI_LABELS="$(kubectl exec -n observability statefulset/loki -- \
-  wget -qO- 'http://localhost:3100/loki/api/v1/labels' 2>/dev/null | head -c 200 || true)"
-if [[ "$LOKI_LABELS" == *'"values"'* && "$LOKI_LABELS" != *'"values":[]'* ]]; then
-  ok "Loki HAS log labels (logs are arriving)"
-else
-  bad "Loki holds no log labels -- logs are not reaching it"
-fi
+check_backend "Loki" observability loki 3100 "/loki/api/v1/labels" '"values"' \
+  "Logs reach Loki via the collector's otlp_http exporter -- check the collector logs."
 
 echo
 c_ylw "B. VALIDITY -- the trust boundary (fatal if violated)"
