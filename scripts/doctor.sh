@@ -57,8 +57,14 @@ for c in d.get('status', {}).get('containerStatuses', []) or []:
             print('        >>> OOMKilled: the MEMORY LIMIT is too low for this workload.')
             print('        >>> Raise resources.limits.memory in the values file, not the request.')
 "
-    echo "      --- last 20 log lines ---"
-    kubectl logs "$POD" -n "$NS" --tail=20 --all-containers 2>&1 | sed 's/^/        /'
+    LOGS="$(kubectl logs "$POD" -n "$NS" --tail=20 --all-containers 2>&1)"
+    if [[ "$LOGS" == *"is waiting to start"* ]]; then
+      echo "      (container has not started yet -- still pulling or scheduling)"
+    else
+      echo "      --- last 20 log lines ---"
+      echo "$LOGS" | sed 's/^/        /'
+    fi
+
     PREV="$(kubectl logs "$POD" -n "$NS" --previous --tail=20 --all-containers 2>/dev/null)"
     if [[ -n "$PREV" ]]; then
       echo "      --- last 20 lines from the PREVIOUS (crashed) container ---"

@@ -63,6 +63,24 @@ require_api() {
   exit 1
 }
 
+# Wait for every pod to settle before judging the cluster.
+#
+# A check that runs the instant an install returns is asking "is this pod ready
+# right now", when the question that matters is "does it become ready". helm
+# --wait does not fully close this gap: a DaemonSet can report ready while its
+# pod is still ContainerCreating.
+wait_for_pods() {
+  local tries="${1:-60}" i pending
+  for (( i = 1; i <= tries; i++ )); do
+    pending="$(kubectl get pods -A --no-headers 2>/dev/null \
+      | awk '$4!="Running" && $4!="Completed" && $4!="Terminating" {print}' | wc -l)"
+    [[ "$pending" -eq 0 ]] && { [[ $i -gt 1 ]] && c_dim "  pods settled after $(( i * 5 ))s"; return 0; }
+    [[ $i -eq 2 ]] && c_ylw "  waiting for $pending pod(s) to become ready ..."
+    sleep 5
+  done
+  return 1
+}
+
 require_kubeconfig() {
   [[ -f "$KUBECONFIG_PATH" ]] \
     || die "No kubeconfig at $KUBECONFIG_PATH. Run: make kubeconfig"

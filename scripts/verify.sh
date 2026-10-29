@@ -21,6 +21,10 @@ bad()  { c_red "  FAIL  $*"; FAIL=$((FAIL+1)); }
 
 SA="system:serviceaccount:research:rca-agent"
 
+# Settle first: images still pulling are not a fault, and judging them as one
+# turns every post-install verify into a false failure.
+wait_for_pods "${SETTLE_TRIES:-60}" || true
+
 echo
 c_ylw "A. LIVENESS"
 
@@ -45,8 +49,13 @@ else
     NS="${line%%/*}"; REST="${line#*/}"; POD="${REST%% *}"
     echo "          --- $NS/$POD: last container state ---"
     kubectl get pod "$POD" -n "$NS" -o jsonpath='{range .status.containerStatuses[*]}            {.name}: {.state}{"\n"}{end}' 2>/dev/null | head -6
-    echo "          --- $NS/$POD: last log lines ---"
-    kubectl logs "$POD" -n "$NS" --tail=8 --all-containers 2>&1 | sed 's/^/            /' | head -10
+    LOGS="$(kubectl logs "$POD" -n "$NS" --tail=8 --all-containers 2>&1 | head -10)"
+    if [[ "$LOGS" == *"is waiting to start"* ]]; then
+      echo "          (container has not started yet -- no logs to show)"
+    else
+      echo "          --- $NS/$POD: last log lines ---"
+      echo "$LOGS" | sed 's/^/            /'
+    fi
   done <<< "$NOTREADY"
 fi
 
