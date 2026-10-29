@@ -29,5 +29,13 @@ else
 fi
 
 TARGET=local "$REPO_ROOT/scripts/kubeconfig.sh"
-c_grn "Local bench up."
+
+# k3d returns once the containers are up; k3s inside them is not yet serving.
+export KUBECONFIG="$KUBECONFIG_PATH"
+if ! wait_for_api 90; then
+  die "Cluster started but the API never became ready (180s).
+  Inspect with:  docker logs k3d-rca-bench-server-0 --tail 40"
+fi
+
+c_grn "Local bench up and the API is serving."
 c_dim "Next: make install TARGET=local"

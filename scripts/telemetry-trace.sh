@@ -11,6 +11,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 set +e
 require_kubeconfig
 need kubectl "Install kubectl."
+require_api 3
 
 echo
 c_ylw "1. What the app is configured to export to"

@@ -13,6 +13,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
 need kubectl "Install kubectl."
+require_api 3
 
 PASS=0; FAIL=0
 ok()   { c_grn "  PASS  $*"; PASS=$((PASS+1)); }

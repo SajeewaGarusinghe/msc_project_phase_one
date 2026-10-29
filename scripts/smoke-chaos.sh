@@ -15,6 +15,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
 need kubectl "Install kubectl."
+require_api 3
 
 EXP="${1:-01-network-delay-productcatalog}"
 F="$REPO_ROOT/platform/chaos/experiments/${EXP}.yaml"

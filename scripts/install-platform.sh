@@ -25,6 +25,8 @@
 # ---------------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
+# 30s of patience here beats a confusing "connection reset by peer" on step 1.
+wait_for_api 15 || require_api 1
 need helm "Install Helm 3: https://helm.sh/docs/intro/install/"
 need kubectl "Install kubectl."
 

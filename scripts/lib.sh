@@ -29,6 +29,40 @@ tf_out() {
     || die "terraform output '$key' unavailable. Has 'terraform apply' run in $TF_DIR?"
 }
 
+# Wait until the API server actually answers.
+#
+# `k3d cluster start` returns as soon as the CONTAINERS are running, which is
+# well before k3s inside them is serving. Anything that runs immediately after
+# gets "connection reset by peer" from an API that is merely not up yet -- a
+# transient condition reported as a hard error.
+wait_for_api() {
+  local tries="${1:-90}" i
+  for (( i = 1; i <= tries; i++ )); do
+    if kubectl get --raw /readyz >/dev/null 2>&1; then
+      [[ $i -gt 1 ]] && c_dim "  API ready after $(( i * 2 ))s"
+      return 0
+    fi
+    [[ $i -eq 3 ]] && c_ylw "  waiting for the Kubernetes API ..."
+    sleep 2
+  done
+  return 1
+}
+
+# Fail loudly when the API is unreachable. Every read-only tool here returns
+# empty on an unreachable API, and empty reads as healthy -- so a check that
+# does not assert reachability first will cheerfully report "no problems".
+require_api() {
+  wait_for_api "${1:-5}" && return 0
+  c_red "Cannot reach the Kubernetes API."
+  c_red "Nothing below can be trusted -- every query would return empty,"
+  c_red "which looks identical to a healthy cluster."
+  echo
+  echo "  Is the cluster running?   k3d cluster list"
+  echo "  Start it:                 make local-up"
+  echo "  After 'wsl --shutdown' k3s needs ~30-60s before it serves."
+  exit 1
+}
+
 require_kubeconfig() {
   [[ -f "$KUBECONFIG_PATH" ]] \
     || die "No kubeconfig at $KUBECONFIG_PATH. Run: make kubeconfig"

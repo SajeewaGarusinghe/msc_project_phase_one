@@ -15,6 +15,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
 need kubectl "Install kubectl."
+require_api 3
 need python3 "Install python3."
 
 FAIL=0

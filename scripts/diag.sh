@@ -6,6 +6,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_kubeconfig
 need kubectl "Install kubectl."
+require_api 3
 
 echo
 c_ylw "=== pods by phase ==="

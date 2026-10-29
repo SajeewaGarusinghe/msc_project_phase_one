@@ -11,6 +11,10 @@ set +e
 set +o pipefail
 require_kubeconfig
 need kubectl "Install kubectl."
+# Without this, an unreachable API makes every section below print nothing and
+# the script conclude "No problems found" -- the most misleading output it
+# could possibly produce.
+require_api 3
 
 FOUND=0
 
