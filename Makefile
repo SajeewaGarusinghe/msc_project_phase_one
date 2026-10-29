@@ -73,7 +73,7 @@ local-destroy: ## Delete the local bench entirely
 	@scripts/local-down.sh destroy
 
 # -------------------------------------------------------------------- cluster
-.PHONY: kubeconfig install verify pin-versions uninstall
+.PHONY: kubeconfig install verify diag pin-versions uninstall
 kubeconfig: ## Fetch kubeconfig into ./kubeconfig
 	@scripts/kubeconfig.sh
 
@@ -83,6 +83,9 @@ install: ## Install the platform layer (observability, app, chaos, rbac)
 verify: ## P0 exit test: liveness + trust-boundary validity
 	@scripts/verify.sh
 	@scripts/chaos-check.sh
+
+diag: ## What is the cluster doing right now? Safe to run during install.
+	@scripts/diag.sh
 
 pin-versions: ## Record deployed chart versions into platform/versions.env
 	@scripts/pin-versions.sh

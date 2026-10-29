@@ -36,15 +36,37 @@ else
   bad "pods not ready:"; echo "$NOTREADY" | sed 's/^/          /'
 fi
 
-# The three signals must actually be arriving. An empty backend is the most
-# common silent failure: the stack is "up" but the app is exporting nowhere.
-TRACE_SVCS="$(kubectl exec -n observability deploy/tempo -- \
-  wget -qO- 'http://localhost:3100/api/search/tags' 2>/dev/null | head -c 200 || true)"
-[[ -n "$TRACE_SVCS" ]] && ok "Tempo responding" || bad "Tempo returned nothing"
+# The three signals must actually be ARRIVING, not merely be queryable. An
+# empty backend is the most common silent failure: the stack is "up" but the
+# app is exporting nowhere, so every later phase captures nothing.
+#
+# This also settles, empirically, whether the demo chart's duplicated
+# OTEL_EXPORTER_OTLP_* env entries resolved in our favour. Reasoning about
+# which definition wins is less reliable than asking the backend.
+
+TRACES="$(kubectl exec -n observability deploy/tempo -- \
+  wget -qO- 'http://localhost:3100/api/search?limit=1' 2>/dev/null || true)"
+if [[ "$TRACES" == *traceID* || "$TRACES" == *traceId* ]]; then
+  ok "Tempo HAS traces (the OTLP path works end to end)"
+elif [[ -n "$TRACES" ]]; then
+  bad "Tempo responds but holds NO traces -- the app is exporting nowhere."
+  echo "          Check OTEL_EXPORTER_OTLP_ENDPOINT resolves to the collector:"
+  echo "          kubectl exec -n app deploy/astronomy-frontend -- env | grep OTEL_EXPORTER"
+else
+  bad "Tempo returned nothing"
+fi
 
 PROM_UP="$(kubectl exec -n observability deploy/prometheus-server -c prometheus-server -- \
   wget -qO- 'http://localhost:9090/api/v1/query?query=up' 2>/dev/null | head -c 80 || true)"
 [[ "$PROM_UP" == *'"status":"success"'* ]] && ok "Prometheus responding" || bad "Prometheus query failed"
+
+LOKI_LABELS="$(kubectl exec -n observability statefulset/loki -- \
+  wget -qO- 'http://localhost:3100/loki/api/v1/labels' 2>/dev/null | head -c 200 || true)"
+if [[ "$LOKI_LABELS" == *'"values"'* && "$LOKI_LABELS" != *'"values":[]'* ]]; then
+  ok "Loki HAS log labels (logs are arriving)"
+else
+  bad "Loki holds no log labels -- logs are not reaching it"
+fi
 
 echo
 c_ylw "B. VALIDITY -- the trust boundary (fatal if violated)"
