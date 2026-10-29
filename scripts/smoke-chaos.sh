@@ -20,6 +20,20 @@ EXP="${1:-01-network-delay-productcatalog}"
 F="$REPO_ROOT/platform/chaos/experiments/${EXP}.yaml"
 [[ -f "$F" ]] || die "no such experiment: $EXP"
 
+# A crash between inject and cleanup leaves the fault running on the cluster,
+# silently poisoning everything measured afterwards. An earlier run did exactly
+# that. The trap fires on normal exit, on error and on Ctrl-C.
+cleanup() {
+  kubectl delete -f "$F" --ignore-not-found >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+# Measurement must never kill the run: a failed query is a missing number, not
+# a reason to abandon an injected fault. pipefail in particular turns one slow
+# kubectl into a script-ending error.
+set +e
+set +o pipefail
+
 WINDOW="${WINDOW:-90}"
 
 # Measure the trace-duration DISTRIBUTION over an explicit window.
@@ -32,12 +46,12 @@ WINDOW="${WINDOW:-90}"
 # the threshold sits below ambient latency.
 #
 # Percentiles of the actual durations have neither problem.
-LIMIT="${LIMIT:-200}"
+LIMIT="${LIMIT:-1000}"
 
 durations() {   # durations <start-unix> <end-unix>  ->  one duration (ms) per line
-  kubectl get --raw \
+  { kubectl get --raw \
     "/api/v1/namespaces/observability/services/tempo:3200/proxy/api/search?start=$1&end=$2&limit=${LIMIT}" \
-    2>/dev/null | python3 -c "
+    2>/dev/null || true; } | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -146,7 +160,7 @@ fi
 
 echo
 c_ylw "6. Cleaning up"
-kubectl delete -f "$F" --ignore-not-found >/dev/null && c_grn "  experiment removed"
+cleanup && c_grn "  experiment removed (the EXIT trap also guarantees this)"
 
 echo
 c_dim "Now LOOK at it: make tunnel-grafana -> compare the last 10 minutes."

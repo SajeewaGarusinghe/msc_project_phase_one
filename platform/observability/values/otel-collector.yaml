@@ -104,6 +104,27 @@ config:
         - sources:
             - from: connection
 
+  # Derive RED metrics (rate / errors / duration) per service FROM the spans.
+  #
+  # The app emits very few OTLP metrics of its own -- around a dozen points --
+  # so Prometheus has almost nothing to chart and Grafana looks empty. The span
+  # stream, by contrast, is rich. This connector turns it into per-service
+  # latency and call-rate series.
+  #
+  # `namespace` is set explicitly so the metric names are DETERMINISTIC rather
+  # than depending on the connector's default, which has changed across
+  # versions. Everything it produces is prefixed rca_ :
+  #     rca_calls_total
+  #     rca_duration_milliseconds_{bucket,sum,count}
+  # The provisioned Grafana dashboard queries exactly those names.
+  connectors:
+    spanmetrics:
+      namespace: rca
+      histogram:
+        explicit:
+          buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+      metrics_flush_interval: 15s
+
   exporters:
     otlp_grpc/tempo:
       endpoint: tempo.observability.svc.cluster.local:4317
@@ -132,7 +153,14 @@ config:
       traces:
         receivers:  [otlp]
         processors: [memory_limiter, k8s_attributes, batch]
-        exporters:  [otlp_grpc/tempo]
+        # Spans go to Tempo AND into the spanmetrics connector.
+        exporters:  [otlp_grpc/tempo, spanmetrics]
+
+      # The connector acts as a receiver for the metrics it derives.
+      metrics/spanmetrics:
+        receivers:  [spanmetrics]
+        processors: [memory_limiter, batch]
+        exporters:  [prometheus_remote_write]
       metrics:
         receivers:  [otlp]
         processors: [memory_limiter, k8s_attributes, batch]
