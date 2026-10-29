@@ -51,8 +51,23 @@ ports:
   - port: 6443:6443
     nodeFilters: [server:0]
 
-volumes:
-  # Chaos Mesh's chaos-daemon needs the containerd socket to inject faults.
-  # Same path as the cloud node because both run k3s.
-  - volume: /run/k3s/containerd/containerd.sock:/run/k3s/containerd/containerd.sock
-    nodeFilters: [server:0]
+# NO volumes are mounted, and that is deliberate.
+#
+# An earlier revision of this file bind-mounted the k3s containerd socket from
+# the host into the node container, reasoning that chaos-daemon needs it. That
+# was wrong, and actively harmful:
+#
+#   - In k3d the "node" IS a container, and k3s runs its embedded containerd
+#     INSIDE that container. The socket already exists at
+#     /run/k3s/containerd/containerd.sock within the node container.
+#   - chaos-daemon runs as a pod on that node, so its hostPath mount resolves
+#     against the node container's filesystem and finds the socket on its own.
+#   - The host has no such path. Docker would therefore create an empty
+#     DIRECTORY there and mount it OVER the real socket, breaking exactly the
+#     thing the mount was supposed to enable. On Windows and macOS hosts, where
+#     the path certainly does not exist, this is guaranteed.
+#
+# The cloud bench is different: there k3s runs directly on the VM, so the socket
+# genuinely is a host path -- which is why platform/chaos/values/chaos-mesh.yaml
+# still sets socketPath. That value is read by chaos-daemon inside the cluster
+# and is correct for BOTH targets.

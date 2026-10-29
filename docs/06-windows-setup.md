@@ -18,10 +18,17 @@ Three things go wrong:
 |---|---|
 | **Slow I/O** — `/mnt/d` is a 9p/virtio filesystem bridge | Helm installs and image pulls crawl; `make install` takes many times longer |
 | **Permission translation** — NTFS has no POSIX mode bits | `chmod 600 kubeconfig` silently does nothing; scripts may refuse to run |
-| **Bind mounts** — `infra/local/k3d-cluster.yaml` mounts the containerd socket | Paths resolve differently across the boundary; chaos experiments fail to attach |
+| **Line endings** — git on Windows may check out CRLF | `bash` scripts fail with `bad interpreter: /bin/bash^M` |
 
-The third one matters most here: Chaos Mesh needs the k3s containerd socket, and
-that mount is exactly the kind of thing that breaks across `/mnt/`.
+**Correction to an earlier version of this document:** it claimed the k3d
+containerd-socket bind mount breaks across `/mnt/`. That was wrong on both
+counts — the mount should not have been there at all (k3d runs k3s *inside* the
+node container, so the socket is already present and chaos-daemon finds it
+without help), and it has been removed from `infra/local/k3d-cluster.yaml`.
+
+So running from `D:` is **slow and awkward, not fatal**. The recommendation to
+work inside WSL2 stands, but on performance and permission grounds rather than
+because fault injection would fail.
 
 ## The setup that works
 

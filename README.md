@@ -12,8 +12,8 @@ That last property is the research requirement. The rest is engineering.
 ## Quick start
 
 **On Windows?** Read [docs/06-windows-setup.md](docs/06-windows-setup.md) first —
-the repo must live inside WSL2, not on a Windows drive, or Chaos Mesh cannot
-attach to pods.
+work inside WSL2 rather than from a Windows drive (`/mnt/...` is slow and loses
+POSIX permissions).
 
 **Free, on your own machine** (needs Docker with ≥ 12 GB):
 
