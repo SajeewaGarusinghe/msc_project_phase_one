@@ -58,17 +58,58 @@ else
   WAIT_FLAGS=(--wait --timeout "$HELM_TIMEOUT")
 fi
 
-c_ylw "[1/5] namespaces"
+c_ylw "[1/6] namespaces"
 kubectl apply -f "$P/namespaces.yaml"
 
-c_ylw "[2/5] helm repositories"
+c_ylw "[2/6] helm repositories"
 helm repo add open-telemetry "$REPO_OTEL" >/dev/null 2>&1 || true
 helm repo add prometheus-community "$REPO_PROMETHEUS" >/dev/null 2>&1 || true
 helm repo add grafana "$REPO_GRAFANA" >/dev/null 2>&1 || true
 helm repo add chaos-mesh "$REPO_CHAOS_MESH" >/dev/null 2>&1 || true
 helm repo update >/dev/null
 
-c_ylw "[3/5] observability backends"
+# ---------------------------------------------------------------------------
+# Validate every values file against its chart BEFORE touching the cluster.
+#
+# `helm template` applies the chart's own values.schema.json and renders the
+# manifests, without contacting the API server. It catches exactly the errors
+# that otherwise surface five minutes into an install, after half the stack has
+# already been upgraded: unknown keys, missing required properties, bad
+# indentation.
+#
+# Costs about twenty seconds. The alternative cost it has already avoided:
+# `at '/default': additional properties 'resources' not allowed` and
+# `at '/components/flagd-ui': missing property 'useDefault'`, both discovered
+# only at step 4 of 5.
+# ---------------------------------------------------------------------------
+c_ylw "[3/6] validating values against chart schemas"
+PREFLIGHT_FAIL=0
+preflight() {   # preflight <release> <chart> <values-file> [version]
+  local out
+  if ! out="$(helm template "$1" "$2" -f "$3" $(ver_flag "${4:-}") 2>&1 >/dev/null)"; then
+    c_red "  FAIL  $1 ($2)"
+    echo "$out" | sed 's/^/        /' | head -12
+    PREFLIGHT_FAIL=1
+  else
+    c_grn "  ok    $1"
+  fi
+}
+preflight prometheus     prometheus-community/prometheus        "$P/observability/values/prometheus.yaml"     "$CHART_VERSION_PROMETHEUS"
+preflight tempo          grafana/tempo                          "$P/observability/values/tempo.yaml"          "$CHART_VERSION_TEMPO"
+preflight loki           grafana/loki                           "$P/observability/values/loki.yaml"           "$CHART_VERSION_LOKI"
+preflight otel-collector open-telemetry/opentelemetry-collector "$P/observability/values/otel-collector.yaml" "$CHART_VERSION_OTEL_COLLECTOR"
+preflight grafana        grafana/grafana                        "$P/observability/values/grafana.yaml"        "$CHART_VERSION_GRAFANA"
+preflight astronomy      open-telemetry/opentelemetry-demo      "$P/app/values/astronomy-shop.yaml"           "$CHART_VERSION_OTEL_DEMO"
+preflight chaos-mesh     chaos-mesh/chaos-mesh                  "$P/chaos/values/chaos-mesh.yaml"             "$CHART_VERSION_CHAOS_MESH"
+
+if [[ "$PREFLIGHT_FAIL" -eq 1 ]]; then
+  echo
+  c_red "Values rejected by a chart. Nothing was changed on the cluster."
+  c_red "Fix the values file above and re-run; no partial install to unwind."
+  exit 1
+fi
+
+c_ylw "[4/6] observability backends"
 # Order within this step: storage backends first, then the collector that
 # writes to them, so the collector's exporters resolve on first start.
 # shellcheck disable=SC2046
@@ -96,13 +137,13 @@ helm upgrade --install grafana grafana/grafana \
   -n observability $(ver_flag "$CHART_VERSION_GRAFANA") \
   -f "$P/observability/values/grafana.yaml" "${WAIT_FLAGS[@]}"
 
-c_ylw "[4/5] application (Astronomy Shop)"
+c_ylw "[5/6] application (Astronomy Shop)"
 # shellcheck disable=SC2046
 helm upgrade --install astronomy open-telemetry/opentelemetry-demo \
   -n app $(ver_flag "$CHART_VERSION_OTEL_DEMO") \
   -f "$P/app/values/astronomy-shop.yaml" "${WAIT_FLAGS[@]}"
 
-c_ylw "[5/5] chaos + rbac"
+c_ylw "[6/6] chaos + rbac"
 # shellcheck disable=SC2046
 helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
   -n chaos-mesh $(ver_flag "$CHART_VERSION_CHAOS_MESH") \

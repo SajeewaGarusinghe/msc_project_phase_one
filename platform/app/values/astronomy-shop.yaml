@@ -82,18 +82,24 @@ default:
 # would make checkout log publish errors continuously -- polluting the clean
 # baseline that every attack measurement is compared against.
 components:
-  chatbot:        { enabled: false }   # LLM demo, large image, off the request path
-  firepit:        { enabled: false }   # continuous profiling UI
-  telemetry-docs: { enabled: false }   # documentation site
-  flagd-ui:       { enabled: false }   # UI for flagd; flagd itself stays
-  mcp:            { enabled: false }   # MCP server demo
-  opamp-server:   { enabled: false }   # agent management demo
-  accounting:     { enabled: false }   # kafka CONSUMER, not on the request path
-  fraud-detection: { enabled: false }  # kafka CONSUMER; was already crash-looping
-
+  # The chart's schema requires BOTH `enabled` and `useDefault` on every
+  # component it sees -- `useDefault: {env: true}` means "start from the
+  # default env list", which is what makes default.envOverrides reach this
+  # component at all. Omitting it fails validation with
+  #     at '/components/<name>': missing property 'useDefault'
+  chatbot:         { enabled: false, useDefault: { env: true } }  # LLM demo, large image
+  firepit:         { enabled: false, useDefault: { env: true } }  # profiling UI
+  telemetry-docs:  { enabled: false, useDefault: { env: true } }  # docs site
+  flagd-ui:        { enabled: false, useDefault: { env: true } }  # UI only; flagd itself stays
+  mcp:             { enabled: false, useDefault: { env: true } }  # MCP demo
+  opamp-server:    { enabled: false, useDefault: { env: true } }  # agent-management demo
+  accounting:      { enabled: false, useDefault: { env: true } }  # kafka consumer, off the path
+  fraud-detection: { enabled: false, useDefault: { env: true } }  # kafka consumer; was crash-looping
 
   load-generator:
     enabled: true
+    useDefault:
+      env: true
     resources:
       limits:
         memory: 1Gi
@@ -106,10 +112,11 @@ components:
       - name: LOCUST_SPAWN_RATE
         value: "2"
 
-  # The frontend proxy is the only component reached from outside, and only
-  # through `make tunnel-frontend`.
+  # The only component reached from outside, and only via `make tunnel-frontend`.
   frontend-proxy:
     enabled: true
+    useDefault:
+      env: true
     resources:
       limits:
         memory: 128Mi
