@@ -66,3 +66,16 @@ The information boundary (A4) is not advice. No arm may read the target identity
 dose, the seed, the three per-record labels, or any other case during a run. Sealed labels live
 outside the case tree and only the scorer reads them. The schemas refuse a case row that carries a
 label field, which is the most plausible way for one to leak.
+
+## CI is not installed yet (a token-scope limit, not a decision)
+
+The workflow is written and lives at **`ci/github-actions-ci.yml`**, not at
+`.github/workflows/ci.yml`, because the token this repository is pushed with lacks GitHub's
+`workflow` scope: a push that touches `.github/workflows/` is rejected outright with
+*"refusing to allow a Personal Access Token to create or update workflow … without `workflow`
+scope"*. Until that scope is granted, CI does not run on push.
+
+To install it, either grant the token the `workflow` scope and `git mv ci/github-actions-ci.yml
+.github/workflows/ci.yml`, or add the file through the GitHub web UI. The build guide requires
+"CI runs unit tests and the A4 tests on every push" (P1 item 1), so **this is an open P1 item**,
+not a finished one.
