@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+# run outputs and anything derived from a case; the manifest itself is committed
+runs/*
+!runs/.gitkeep
+cases/
+sealed/
+ledger.csv

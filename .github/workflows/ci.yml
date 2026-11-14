@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.7"
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install
+        run: uv sync --extra dev
+      - name: Unit tests and the A4 boundary tests
+        run: uv run pytest -q
+      - name: The build guide's P1 and A4 tests, named
+        run: |
+          uv run pytest -q -k "d0_identity" --no-header   # P1-T4
+          uv run pytest -q -k "a4"         --no-header    # A4-T1, A4-T2
