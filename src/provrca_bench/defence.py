@@ -10,8 +10,10 @@ CaseToolkit output, which is why `D0.filter` returns the same object it was give
 copy, a reserialisation or a normalised form -- any of those would pass an equality check while
 failing a byte comparison on some input.
 
-Every verdict a layer produces is appended to `runs/<run>/audit.jsonl`, including the compatible
-and unknown ones, so P8 can audit clean removals rather than only the withheld items.
+Every verdict is recorded, including the compatible and unknown ones, so P8 can audit clean
+removals: ProvRCA writes the full per-item verdict table once per (run, case) as
+`verdicts-<case>.csv.gz`, and one `audit.jsonl` line per withheld item with its rule inputs
+(`provrca/demotion.py`; an amendment to A3's "one line per evidence item", decisions log 25 Nov).
 """
 from __future__ import annotations
 
@@ -73,6 +75,9 @@ class AuditLog:
         with self.path.open(encoding="utf-8") as f:
             return [VerdictRecord.model_validate_json(line) for line in f if line.strip()]
 
-    def withheld(self) -> list[VerdictRecord]:
-        """The records a demoting arm would have removed from tool output."""
-        return [r for r in self.read() if is_demoted(Reason(r.reason))]
+    def withheld(self, demoted: frozenset[str] | None = None) -> list[VerdictRecord]:
+        """The records a demoting arm removed from tool output. ``demoted`` is the arm's set of
+        verdicts (D1: rejected; D4: rejected and contradicted); the default is A3's full set."""
+        if demoted is None:
+            return [r for r in self.read() if is_demoted(Reason(r.reason))]
+        return [r for r in self.read() if r.verdict.value in demoted]
