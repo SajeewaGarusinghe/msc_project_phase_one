@@ -1,4 +1,4 @@
-"""Development-data preview of R1/R2 reach on FrameBench T2 overlays (P3 step 2). NOT a result.
+"""Development-data preview of R1/R2 reach on FrameBench overlays (T2, F3c, T1). NOT a result.
 
     uv run python scripts/p3_reach_preview.py --out evidence/p3_reach_preview.csv
 
@@ -22,28 +22,31 @@ from provrca_bench.provrca.rules import Config
 REPO = Path(__file__).resolve().parents[1]
 GEN = Path(os.environ.get("PROVRCA_FRAMEBENCH_ROOT", REPO / "cases" / "framebench-dev"))
 SEALED = Path(os.environ.get("PROVRCA_FRAMEBENCH_SEALED", REPO / "sealed" / "framebench-dev"))
-FAMILIES = ("F2", "F3", "FS")
+FAMILIES = ("F2", "F3", "FS", "F3c")
 
 
 def one(case_id: str) -> list[dict]:
     cfg = Config.load()
     rows = []
-    for fam in FAMILIES:
-        for dose in ("high", "low"):
-            v = f"{fam}-T2-{dose}-20261125"
-            if not (GEN / case_id / v).exists():
-                continue
-            forged = {json.loads(l)["record_id"] for l in
-                      (SEALED / case_id / f"{v}.labels.jsonl").read_text().splitlines()}
-            j = judge_spans(read_traces(GEN / case_id / v / "traces.csv"), cfg)
-            is_forged = j.record_id.isin(forged)
-            c = Counter(zip(is_forged, j.verdict, j.reason, j.r1_reason, j.r2_reason, j.tier))
-            for (f, verdict, reason, r1, r2, tier), n in c.items():
-                if not f and verdict != "contradicted":
-                    continue          # genuine records: only collateral contradictions matter
-                rows.append({"case_id": case_id, "family": fam, "dose": dose,
-                             "record": "forged" if f else "genuine", "verdict": verdict,
-                             "reason": reason, "r1": r1, "r2": r2, "tier": tier, "n": n})
+    for v in sorted(p.name for p in (GEN / case_id).iterdir()):
+        fam, threat, dose = (v.split("-") + ["", "", ""])[:3]
+        if fam not in FAMILIES:
+            continue
+        labels = [json.loads(l) for l in (SEALED / case_id / f"{v}.labels.jsonl").read_text().splitlines()]
+        claims = {l["record_id"]: l for l in labels if l["escape"] != "witness"}
+        t = read_traces(GEN / case_id / v / "traces.csv")
+        for attribution in ((True, False) if threat == "T1" else (True,)):
+            j = judge_spans(t, cfg, attribution=attribution)
+            is_claim = j.record_id.isin(claims)
+            esc = j.record_id.map(lambda r: claims[r]["escape"] if r in claims else "")
+            c = Counter(zip(is_claim, j.verdict, j.reason, j.r1_reason, j.r2_reason, esc))
+            for (f, verdict, reason, r1, r2, e), n in c.items():
+                if not f and verdict not in ("contradicted", "rejected"):
+                    continue          # genuine records and witnesses: only demotions matter
+                rows.append({"case_id": case_id, "family": fam, "threat": threat, "dose": dose,
+                             "attribution": attribution,
+                             "record": "forged_claim" if f else "other", "verdict": verdict,
+                             "reason": reason, "r1": r1, "r2": r2, "escape": e, "n": n})
     return rows
 
 

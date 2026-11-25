@@ -16,9 +16,13 @@ What is written
 What is never written into the case: the family, dose, seed, target or any label. Those go to the
 sealed directory only (A4), as ``<case>/<variant>.labels.jsonl`` and ``<case>/<variant>.meta.json``.
 
-Threat model: this file builds **T2** (the genuine emitter: the target is the sender of its own
-false records). T1 variants and the adaptive families (F2c, F3c, FSc) need the P3 matcher and are
-built after it; AF1/AF2 likewise.
+Threat models: **T2** (the genuine emitter: the target is the sender of its own false records,
+edited in place) for every family, and **T1** (a spoofer that *adds* forged pairs from
+``attacker-pod``) for F2 and F3; the rule-aware constructions are in ``adaptive.py``. F2c and FSc
+(escape routes chosen by distinguishability, step 4b) and AF1/AF2 come later.
+
+Labels carry ``rule_applicable`` (as delivered, derived from what the generator did),
+``rule_applicable_clean`` (the clean pair, from the P3 chain on the clean case) and ``escape``.
 """
 from __future__ import annotations
 
@@ -36,12 +40,16 @@ import numpy as np
 import pandas as pd
 
 from provrca_bench.contracts import LabelRecord
+from provrca_bench.framebench import adaptive
 from provrca_bench.framebench.case import CleanCase, log_name
 from provrca_bench.framebench.doses import CaseDose, dose_for
 from provrca_bench.framebench.target import CandidateCheck, seed_for
 
-FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1")
-SPAN_FAMILIES = {"F2", "F3", "FS"}
+FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1", "F3c")
+SPAN_FAMILIES = {"F2", "F3", "FS", "F3c"}
+T1_FAMILIES = {"F2", "F3"}
+#: the rule each span family's forgery targets (label ``rule_applicable``)
+RULE_OF = {"F2": ("r2",), "F3": ("r1",), "F3c": ("r1",), "FS": ("r1", "r2")}
 LOG_FAMILIES = {"F1", "F4", "A1"}
 HARDLINK = ("metrics.csv", "simple_metrics.csv", "metrics_postprocess.log",
             "pod-node-1.csv", "pod-node-2.csv")
@@ -77,6 +85,7 @@ class BuildResult:
     injected: int = 0
     edited: int = 0
     labels: list[dict] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------------------------
@@ -148,16 +157,19 @@ def _log_inserts(case: CleanCase, logs: pd.DataFrame, target: str, family: str, 
 # Writing
 # --------------------------------------------------------------------------------------------
 
-def _write_traces(src: Path, dst: Path, edits: dict[str, dict]) -> int:
-    """Genuine lines byte for byte plus ',<sender>'; edited lines re-serialised field by field."""
+def _write_traces(src: Path, dst: Path, edits: dict[str, dict],
+                  inserts: dict[int, list[str]] | None = None) -> int:
+    """Genuine lines byte for byte plus ',<sender>'; edited lines re-serialised field by field;
+    T1's forged lines (already carrying their sender) written after data row ``i``."""
     done = 0
+    inserts = inserts or {}
     with src.open(newline="") as fin, dst.open("w", newline="") as fout:
         header = fin.readline().rstrip("\r\n")
         cols = header.split(",")
         i_sid, i_svc = cols.index("spanID"), cols.index("serviceName")
         i_dur, i_code = cols.index("duration"), cols.index("statusCode")
         fout.write(header + ",sender\n")
-        for line in fin:
+        for row_no, line in enumerate(fin):
             raw = line.rstrip("\r\n")
             f = next(csv.reader([raw]))
             e = edits.get(f[i_sid])
@@ -171,6 +183,8 @@ def _write_traces(src: Path, dst: Path, edits: dict[str, dict]) -> int:
                 raw = buf.getvalue()
                 done += 1
             fout.write(f"{raw},{f[i_svc]}\n")
+            for extra in inserts.get(row_no, ()):
+                fout.write(extra)
     return done
 
 
@@ -192,6 +206,20 @@ def _derive(case_dir: Path, python: str) -> None:
         raise RuntimeError(f"derive failed for {case_dir}: {r.stderr.strip()[-600:]}")
 
 
+def _achieved(case: CleanCase, out: Path, target: str) -> dict:
+    """The dose as delivered, measured on the overlay's own spans (never assumed)."""
+    ov = CleanCase(case_id=case.case_id, case_dir=out, task=case.task, root_cause=case.root_cause,
+                   fault=case.fault, template=case.template)
+    lo, hi = case.inject_time * 1_000_000, case.window[1] * 1_000_000
+    s = ov.server_spans(target)
+    s = s[(s.startTime >= lo) & (s.startTime < hi)]
+    share = float((s.statusCode.fillna(0) != 0).mean()) if len(s) else None
+    ratio = ov.p95_ratio(target)
+    return {"achieved_post_nonok_share": None if share is None else round(share, 4),
+            "achieved_p95_ratio": None if ratio is None else round(ratio, 4),
+            "achieved_post_server_spans": int(len(s))}
+
+
 def harness_python() -> str:
     """The interpreter that has RCAEval's convert extra (drain3). Configurable because this
     package does not depend on it; P1 used the G0 pilot's environment."""
@@ -208,8 +236,8 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
                   python: str | None = None) -> BuildResult:
     if family not in FAMILIES:
         raise ValueError(f"family must be one of {FAMILIES}")
-    if threat != "T2":
-        raise NotImplementedError("T1 variants need the P3 matcher (forged caller spans)")
+    if threat not in ("T1", "T2") or (threat == "T1" and family not in T1_FAMILIES):
+        raise ValueError(f"threat {threat} is not built for {family} (T1: {sorted(T1_FAMILIES)})")
     if family != "clean" and not target:
         raise ValueError("an overlay needs a target")
     variant = variant_name(family, threat, dose_level, seed)
@@ -230,10 +258,22 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
 
     spans_before = None
     edits: dict[str, dict] = {}
-    if family in SPAN_FAMILIES:
+    escape: dict[str, str] = {}
+    t1 = None
+    if threat == "T1":
+        t1 = adaptive.t1_inserts(case, target, family, dose, rng)
+        res.extra.update(t1_requested=t1.requested, t1_written=len(t1.server_ids),
+                         t1_forged_parents=len(t1.parent_ids), t1_skipped_no_fit=t1.skipped_no_fit)
+    elif family == "F3c":
+        f3c = adaptive.f3c_edits(case, target, dose.f3_factor, rng)
+        edits, escape = f3c.edits, f3c.escape
+        res.extra["f3c_gap_source"] = sorted(f3c.gap_source)
+    elif family in SPAN_FAMILIES:
         edits = _span_edits(case, target, family, dose, rng)
-        spans_before = case.spans.set_index("spanID").loc[list(edits)] if edits else None
-    res.edited = _write_traces(case.case_dir / "traces.csv", out / "traces.csv", edits)
+    if edits:
+        spans_before = case.spans.set_index("spanID").loc[list(edits)]
+    res.edited = _write_traces(case.case_dir / "traces.csv", out / "traces.csv", edits,
+                               t1.lines if t1 else None)
 
     logs = pd.read_csv(case.case_dir / "logs.csv", low_memory=False, keep_default_na=False)
     inserts = (_log_inserts(case, logs, target, family, dose, rng)
@@ -246,18 +286,36 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
     # labels: one per edited or injected record
     base = dict(case_id=case.case_id, variant=variant, target=target or "none",
                 family=family if family != "clean" else "A1", threat_model=threat,
-                dose=dose_level, seed=seed, fabricated=True, rule_applicable=None)
+                dose=dose_level, seed=seed, fabricated=True)
     if family != "clean":
+        pairs = adaptive.clean_pairs(str(case.case_dir)) if (edits or t1) else None
         for sid, e in edits.items():
             orig = spans_before.loc[sid]
             false_status = "statusCode" in e and not (orig.statusCode == float(e["statusCode"]))
             false_duration = "duration" in e and e["duration"] != int(orig.duration)
-            res.labels.append(LabelRecord(**base, record_id=f"span:{sid}",
-                                          factually_false=bool(false_status or false_duration))
-                              .model_dump())
+            clean_ok = bool(sid in pairs.index and any(pairs.at[sid, r] for r in RULE_OF[family]))
+            esc = escape.get(sid, "none")
+            res.labels.append(LabelRecord(
+                **base, record_id=f"span:{sid}",
+                factually_false=bool(false_status or false_duration),
+                rule_applicable=clean_ok and esc in ("none", "R1_cap"),
+                rule_applicable_clean=clean_ok, escape=esc).model_dump())
+        if t1:
+            for sid in t1.server_ids:
+                ok = bool(t1.applicable.get(sid, False))
+                res.labels.append(LabelRecord(**base, record_id=f"span:{sid}", factually_false=True,
+                                              rule_applicable=ok, rule_applicable_clean=ok,
+                                              escape="none").model_dump())
+            for cid in t1.client_ids + t1.parent_ids:
+                res.labels.append(LabelRecord(**base, record_id=f"span:{cid}", factually_false=True,
+                                              rule_applicable=None, rule_applicable_clean=None,
+                                              escape="witness").model_dump())
         for k, row in enumerate(inserts):
             res.labels.append(LabelRecord(**base, record_id=f"log:{row['timestamp']}:{k}",
-                                          factually_false=family != "A1").model_dump())
+                                          factually_false=family != "A1", rule_applicable=False,
+                                          rule_applicable_clean=False,
+                                          escape="no_log_rule").model_dump())
+        res.extra.update(_achieved(case, out, target))
     _seal(res, Path(sealed_root), checks)
     return res
 
@@ -270,6 +328,6 @@ def _seal(res: BuildResult, sealed_root: Path, checks: list[CandidateCheck] | No
             f.write(json.dumps(lab, sort_keys=True) + "\n")
     meta = {"case_id": res.case_id, "variant": res.variant, "target": res.target,
             "family": res.family, "dose": asdict(res.dose) if res.dose else None,
-            "edited_spans": res.edited, "injected_lines": res.injected,
+            "edited_spans": res.edited, "injected_lines": res.injected, **res.extra,
             "target_checks": [asdict(c) for c in checks] if checks else None}
     (d / f"{res.variant}.meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")

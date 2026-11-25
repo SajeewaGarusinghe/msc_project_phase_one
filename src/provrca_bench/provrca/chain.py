@@ -64,12 +64,13 @@ def judge_spans(spans: pd.DataFrame, cfg: Config, *, attribution: bool = True) -
     ok = spans[~bad]
     m = match(ok, rejected=spans[bad])
     res = pd.DataFrame({"kind": "span", "record_id": "span:" + spans.spanID.astype(str),
-                        "reason": "", "detail": "", "role": "", "tier": "", "route": "",
+                        "reason": "", "detail": "", "role": "", "tier": "", "route": "", "partner": "",
                         "r1_reason": "", "r1_detail": "", "r2_reason": "", "r2_detail": "",
                         "server_us": "", "client_us": "", "server_code": "", "client_code": ""},
                        index=spans.index)
     res.loc[bad, ["reason", "detail"]] = [Reason.ATTR_MISMATCH.value, "claim_not_sender"]
-    res.loc[m.index, ["reason", "detail", "role", "tier"]] = m[["outcome", "detail", "role", "tier"]].values
+    res.loc[m.index, ["reason", "detail", "role", "tier", "partner"]] = \
+        m[["outcome", "detail", "role", "tier", "partner"]].values
 
     pairs = _pairs(ok, m)
     if len(pairs):

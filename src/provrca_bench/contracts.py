@@ -122,8 +122,18 @@ class LabelRecord(_Strict):
     factually_false: bool = Field(
         description="its claim disagrees with the original data for the same request or window")
     rule_applicable: bool | None = Field(
-        description="R1 or R2's conditions hold for its pair, computed with the P3 matcher. "
-                    "None until that matcher exists: P2 writes it unset rather than guessing")
+        description="as delivered: the rule its forgery targets (F2: R2, F3/F3c: R1, FS: either) "
+                    "has its conditions hold for the record's pair in the overlay. Derived from "
+                    "what the generator did, never by running the matcher on the overlay. None "
+                    "for records that are not claims (a T1 forged caller span is a witness)")
+    rule_applicable_clean: bool | None = Field(
+        default=None,
+        description="the same rule's conditions on the clean, pre-overlay pair "
+                    "(provrca.chain.applicability_in_clean); for a T1 forged pair, on the "
+                    "constructed pair judged with attribution off")
+    escape: Literal["none", "R1_cap", "rule_not_applicable", "witness", "no_log_rule", "T6_drop",
+                    "dangling", "role_field", "dup_id", "client_generated"] | None = Field(
+        default=None, description="how the forgery stays out of a rule's reach, if it does")
 
     _check_service = field_validator("target")(_no_underscore)
 

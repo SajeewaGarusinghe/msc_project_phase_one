@@ -91,13 +91,10 @@ def test_traces_writer_keeps_genuine_lines_and_edits_only_named_spans(tmp_path):
     assert lines[2] == '18:35,t1,s2,cartservice,GetCart,"a,b",1000,1000001,70,13.0,s1,cartservice'
 
 
-@pytest.mark.xfail(strict=True, reason="P2-T6 needs the P3 matcher: adaptive (F2c, F3c, FSc) and "
-                                       "T1 variants are not built until R1/R2 are implemented")
-def test_p2_t6_adaptive_and_t1_rows_pass_the_rules_by_construction():
-    with pytest.raises(NotImplementedError):
-        fb.build_variant(None, target="x", family="F2", threat="T1", seed=1,   # type: ignore
-                         out_root=Path("."), sealed_root=Path("."))
-    raise AssertionError("not built yet")
+@pytest.mark.xfail(strict=True, reason="F2c and FSc are built in step 4b, after their escape routes "
+                   "are chosen by distinguishability on development data")
+def test_p2_t6_f2c_and_fsc_pass_the_rules_by_construction():
+    assert {"F2c", "FSc"} <= set(fb.FAMILIES)
 
 
 # --------------------------------------------------------------------------------------------
@@ -192,7 +189,8 @@ def test_p2_t3_the_target_is_never_the_root_cause_and_every_check_is_recorded():
 @real
 @pytest.mark.skipif(not os.environ.get("PROVRCA_HARNESS_PYTHON"),
                     reason="P2-T4 rebuilds a variant and needs PROVRCA_HARNESS_PYTHON")
-def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path):
+@pytest.mark.parametrize("family,threat", [("FS", "T2"), ("F3c", "T2"), ("F3", "T1")])
+def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path, family, threat):
     from provrca_bench.framebench.case import load_dev_cases
     from provrca_bench.framebench.target import draw_target
     dev = {json.loads(l)["source"].split("/")[0] for l in ANSWERS.read_text().splitlines()}
@@ -202,7 +200,7 @@ def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path):
     digests = []
     for k in range(2):
         out = tmp_path / f"b{k}"
-        res = fb.build_variant(case, target=target, family="FS", dose_level="high",
+        res = fb.build_variant(case, target=target, family=family, threat=threat, dose_level="high",
                                seed=20261125, out_root=out / "cases", sealed_root=out / "sealed")
         files = sorted(p for p in res.out_dir.iterdir())
         sealed = sorted((out / "sealed" / case.case_id).iterdir())
@@ -219,8 +217,17 @@ def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path):
 @pytest.mark.parametrize("row", ROWS[::13] or [None], ids=lambda r: r and f"{r['case_id']}/{r['variant']}")
 def test_p2_t5_every_record_clean_and_injected_carries_a_sender(row):
     case_dir = GEN / row["case_id"] / row["variant"]
-    t = pd.read_csv(case_dir / "traces.csv", usecols=["serviceName", "sender"])
-    assert t.sender.notna().all() and (t.sender == t.serviceName).all()      # T2: own identity
+    t = pd.read_csv(case_dir / "traces.csv", usecols=["spanID", "serviceName", "sender"],
+                    dtype={"spanID": str})
+    assert t.sender.notna().all()
+    if row.get("threat") == "T1":      # genuine records keep their own identity; forged ones the attacker's
+        forged = {json.loads(l)["record_id"][5:] for l in (SEALED / row["case_id"] / f"{row['variant']}.labels.jsonl")
+                  .read_text().splitlines()}
+        is_forged = t.spanID.isin(forged)
+        assert (t.sender[is_forged] == "attacker-pod").all()
+        assert (t.sender[~is_forged] == t.serviceName[~is_forged]).all()
+    else:
+        assert (t.sender == t.serviceName).all()                               # T2: own identity
     lg = pd.read_csv(case_dir / "logs.csv", usecols=["container_name", "sender"])
     assert lg.sender.notna().all() and (lg.sender == lg.container_name).all()
 

@@ -1,6 +1,6 @@
 {
   "name": "ProvRCA applicability table, Track A (RCAEval RE2-OB / RE3-OB, Online Boutique)",
-  "status": "development; locked at P3 item 7 and hashed at the G3 freeze (build guide P6 item 3)",
+  "status": "locked 2026-11-25 (build guide P3 item 7). Changes only for a clean counter-example found at G2 or a P3-T3/T4 (AF1/AF2) failure, each recorded in the decisions log with the new hash in config/provrca/track-a.lock; hashed again in the G3 freeze manifest",
   "epsilon_us": 0,
   "epsilon_source": "decisions log 2026-11-13 '\u03b5 stays 0; it is argued, not fitted': durations are integer \u00b5s and the tightest clean pair leaves 1,099 \u00b5s (07-rule-prototype.md)",
   "null_status_is_ok": true,

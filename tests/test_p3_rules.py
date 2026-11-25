@@ -260,3 +260,10 @@ def test_p3_t2_zero_clean_false_contradictions():
     # every clean RE2-OB pair on a covered route is in R1's and R2's reach; none on Train Ticket
     assert sum(v["r1_applied"] for v in re2) > 0 and sum(v["r1_applied"] for v in re3) == 0
     assert sum(v["r2_applied"] for v in re3) == 0
+
+
+def test_the_table_is_locked():
+    """P3 item 7: any change to the table must come with a new lock and a decisions-log entry."""
+    lock = (DEFAULT_CONFIG.parent / "track-a.lock").read_text().strip()
+    assert CFG.sha256 == lock
+    assert json.loads(DEFAULT_CONFIG.read_text())["status"].startswith("locked")
