@@ -10,7 +10,7 @@ INJECT_TIME = 1_705_354_000
 
 
 def span(**kw):
-    base = dict(time=1_705_354_100, traceID="abc123", spanID="s1",
+    base = dict(time="18:35", traceID="abc123", spanID="s1",
                 serviceName="productcatalogservice", methodName="GetProduct",
                 operationName="hipstershop.ProductCatalogService/GetProduct",
                 startTimeMillis=1_705_354_100_000, startTime=1_705_354_100_000_000,
@@ -53,11 +53,11 @@ def test_extra_columns_are_refused():
 
 
 def test_log_row_validates_and_refuses_an_underscore_container():
-    row = LogLineRow(time=1, timestamp="2026-01-15T21:24:00Z", container_name="frontend",
+    row = LogLineRow(time="21:24", timestamp=1_705_354_100_000_000_000, container_name="frontend",
                      message="request complete", level="info", sender="frontend")
     assert row.level == "info"
     with pytest.raises(ValidationError):
-        LogLineRow(time=1, timestamp="t", container_name="front_end", message="m", sender="frontend")
+        LogLineRow(time="21:24", timestamp=1, container_name="front_end", message="m", sender="frontend")
 
 
 def label(**kw):

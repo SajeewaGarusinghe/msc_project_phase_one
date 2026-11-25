@@ -26,6 +26,7 @@ confirmatory test (`Msc-project/09-results/g0/G0_report.md`).
 | `cases.py` | the 36 clean development cases with derived files rebuilt by `rcaeval-convert derive` |
 | `parity.py` | BARO over released and rebuilt derived files (P1 item 5) |
 | `boundary.py` | A4: the sealed store, the `cases/` layout, keyed variant names, `launch_arm`, and the A4-T2 leak scan |
+| `framebench/` | P2 (started 25 Nov): target rule, doses, the variant builder and the dev-set generator — see below |
 
 Two constraints from A3 are enforced by the schemas rather than left to care: a service name may
 contain no `_` (RCAEval reads the service as the text before the first underscore), and a row
@@ -35,7 +36,6 @@ carries the fault-window check that `tracets_lat`'s pre-fault baseline makes nec
 
 | Module | Phase | What fills it |
 |---|---|---|
-| `framebench/` | P2 | the overlay generator: `(clean case, target, family, threat model, dose, seed) → bytes + sealed labels`, deterministic |
 | `provrca/` | P3 | attribution → one-to-one matcher → applicability → R1/R2, or *unknown* with a reason |
 | `arms/` | P4 | D1 authentication, D2 consistency (from the published specifications — no code was released), D3 source priority, D4 ProvRCA |
 | `scoring/` | P8 | TBR, the difference-in-differences, the wild cluster bootstrap-t with Webb weights, category rates |
@@ -72,6 +72,30 @@ PYTHONPATH=src ~/g0_pilot/.venv/bin/python -m provrca_bench.boundary \
 not depend on.) CI tests the scanner on planted leaks and checks the committed record.
 
 **P1-T3** intervals: `scripts/parity_intervals.py` → `evidence/p1_t3_parity.json`.
+
+## FrameBench (P2, in progress)
+
+```bash
+PROVRCA_HARNESS_PYTHON=~/g0_pilot/.venv/bin/python uv run python -m provrca_bench.framebench.generate \
+  --dataset parity/dataset-rebuilt --tasks parity/tasks-rebuilt/re2-ob/cases \
+  --answers parity/tasks-rebuilt/re2-ob.answers.jsonl \
+  --out cases/framebench-dev --sealed sealed/framebench-dev --seed 20261125 --workers 6
+PROVRCA_HARNESS_PYTHON=~/g0_pilot/.venv/bin/python uv run pytest -q tests/test_framebench.py
+```
+
+`derive` needs RCAEval's `convert` extra (drain3), which this package does not depend on, so
+`PROVRCA_HARNESS_PYTHON` names an interpreter that has it, as P1 item 4 did.
+
+- **Target rule:** the four checks of proposal section 12, with check (a) read as "not BARO's top
+  service" (K21). It reproduces G0 step 8 exactly: 0 score mismatches over 396 candidate rows,
+  3.39 eligible targets per case, and 51 callee / 71 sibling.
+- **Doses** were decided by the owner on 25 Nov after a data check (Msc-project decisions log):
+  - **F2/FS:** a pooled development reference, share 0.4975 at code 13 (low dose is half). 34 of
+    36 cases have no genuine error-rate rise to match.
+  - **F1/F4:** 20 lines high, 10 low, because the root cause writes no error lines in any case.
+  - **F3:** the factor that brings the target's p95 rise up to the case's largest genuine one.
+- **Built so far:** T2 variants of F1, F2, F3, FS, F4 and A1. T1 and the adaptive families need
+  the P3 matcher, so P2-T6 is an expected failure.
 
 ## On pinning RCAEval
 
