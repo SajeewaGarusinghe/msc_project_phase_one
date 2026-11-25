@@ -15,6 +15,12 @@ a violation is silent otherwise:
 Column names and types follow the released RE2/RE3 files as measured in G0 stage 2 step 1, not an
 idealisation of them: ``statusCode`` really is absent on some genuine spans, and ``methodName`` is
 empty on the frontend's HTTP spans.
+
+**Corrected 25 Nov 2026 against the real files** (``tests/test_contracts_real_data.py``). The P1
+versions were tested on hand-written rows only, and two fields were wrong: ``time`` is wall-clock
+``HH:MM`` text in both ``traces.csv`` and ``logs.csv``, not Unix seconds, and a log row's
+``timestamp`` is integer **nanoseconds**. ``statusCode`` is written as a float (``0.0``, ``13.0``),
+which an integer field accepts when it has no fractional part.
 """
 from __future__ import annotations
 
@@ -43,7 +49,8 @@ class _Strict(BaseModel):
 class TraceSpanRow(_Strict):
     """One row of ``traces.csv``, plus the sender attribute every record carries (A4)."""
 
-    time: int = Field(ge=0, description="unix seconds, as the released files record it")
+    time: str = Field(pattern=r"^\d{1,2}:\d{2}$",
+                      description="wall-clock HH:MM, as the released files record it")
     traceID: str = Field(min_length=1)
     spanID: str = Field(min_length=1)
     serviceName: ServiceName
@@ -81,8 +88,8 @@ class LogLineRow(_Strict):
     that matches no existing template creates a new one, which is itself detectable (K22).
     """
 
-    time: int = Field(ge=0)
-    timestamp: str = Field(min_length=1)
+    time: str = Field(pattern=r"^\d{1,2}:\d{2}$", description="wall-clock HH:MM")
+    timestamp: int = Field(ge=0, description="nanoseconds since the epoch")
     container_name: ServiceName
     message: str
     level: str | None = None
@@ -114,8 +121,9 @@ class LabelRecord(_Strict):
     fabricated: bool = Field(description="always true for an injected record")
     factually_false: bool = Field(
         description="its claim disagrees with the original data for the same request or window")
-    rule_applicable: bool = Field(
-        description="R1 or R2's conditions hold for its pair, computed with the P3 matcher")
+    rule_applicable: bool | None = Field(
+        description="R1 or R2's conditions hold for its pair, computed with the P3 matcher. "
+                    "None until that matcher exists: P2 writes it unset rather than guessing")
 
     _check_service = field_validator("target")(_no_underscore)
 
