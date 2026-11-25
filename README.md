@@ -14,7 +14,7 @@ start. The decision it produced scopes this package: anything that depends on R1
 on the Online Boutique strata, and H2b is reported as estimation with intervals rather than as a
 confirmatory test (`Msc-project/09-results/g0/G0_report.md`).
 
-## What is here (build-guide P1, items 1, 2, 6, 7)
+## What is here (build-guide P1, items 1–7, and the A4 boundary)
 
 | Module | What it holds |
 |---|---|
@@ -22,6 +22,10 @@ confirmatory test (`Msc-project/09-results/g0/G0_report.md`).
 | `contracts.py` | A3's typed schemas: trace and log rows, sealed labels, verdict records, ledger rows, split entries |
 | `defence.py` | the single `filter(tool, args, raw_output, sender)` interface every arm sees tool output through, `D0` as the identity function, and the append-only verdict log |
 | `ledger.py` | the run ledger, written before a run starts, and the study-level cost cap |
+| `manifest.py` | the split manifest with a SHA-256 per file, and the test lock (refuses S1–S3 before the `g3-freeze` tag) |
+| `cases.py` | the 36 clean development cases with derived files rebuilt by `rcaeval-convert derive` |
+| `parity.py` | BARO over released and rebuilt derived files (P1 item 5) |
+| `boundary.py` | A4: the sealed store, the `cases/` layout, keyed variant names, `launch_arm`, and the A4-T2 leak scan |
 
 Two constraints from A3 are enforced by the schemas rather than left to care: a service name may
 contain no `_` (RCAEval reads the service as the text before the first underscore), and a row
@@ -41,15 +45,33 @@ carries the fault-window check that `tracets_lat`'s pre-fault baseline makes nec
 
 ```bash
 uv sync --extra dev
+scripts/a4_users.sh               # once per machine: the sealer and arm users A4-T1 needs (sudo)
 uv run pytest -q
 uv run pytest -q -k d0_identity   # P1-T4
 uv run pytest -q -k a4            # A4-T1, A4-T2
 ```
 
-40 pass; **2 are skipped on purpose**. A4-T1 (an arm cannot open a sealed file or list sibling
-variants) and A4-T2 (no trajectory names the target beside "fake", "injected" or a family code)
-need the runner and the separate Unix user from P1 item 3 onward. They are declared and skipped
-with the reason, rather than written to pass vacuously, so the gap is visible in CI output.
+**A4-T1** builds the real layout and starts a probe *as the arm user* through `launch_arm`: it
+must be denied the sealed file, the sealed directory, its own case directory (sibling variants)
+and `cases/` (other cases), and must still read its own variant (the control). Without sudo or
+the two users it is skipped on a workstation, and **fails** under CI or with
+`PROVRCA_REQUIRE_A4=1`, so CI cannot go green without the boundary.
+
+**A4-T2** replays every tool call of the G0 pilot's 144 runs through `CaseToolkit`, so it scans
+the exact outputs the agent saw (each replay's size is checked against the trajectory's
+`result_chars`), plus every prompt and trajectory line. The pilot's case data is 14 GB and lives
+in `g0_pilot`, so the scan is run by hand and its record is committed:
+
+```bash
+PYTHONPATH=src ~/g0_pilot/.venv/bin/python -m provrca_bench.boundary \
+  --labels ~/g0_pilot/pilot_sealed/labels.jsonl --cases ~/g0_pilot/pilot_tasks/pilot/cases \
+  --trajectories ~/g0_pilot/pilot_preds.jsonl.trajectories --out evidence/a4_t2_pilot.json
+```
+
+(The pilot's venv is used because `CaseToolkit` imports scikit-learn, which this package does
+not depend on.) CI tests the scanner on planted leaks and checks the committed record.
+
+**P1-T3** intervals: `scripts/parity_intervals.py` → `evidence/p1_t3_parity.json`.
 
 ## On pinning RCAEval
 

@@ -1,0 +1,21 @@
+{
+  "test": "A4-T2",
+  "cases": 144,
+  "families": [
+    "F1",
+    "F2",
+    "F3",
+    "clean"
+  ],
+  "prompts_scanned": 144,
+  "tool_outputs_scanned": 2529,
+  "tool_output_chars": 2321971,
+  "trajectory_lines_scanned": 4555,
+  "window_chars": 120,
+  "reveal_words": "\\b(fake[sd]?|faked|injected|fabricat\\w*|forg(?:e|ed|ery|eries)|spoof\\w*|overlay)\\b",
+  "family_codes": "(?<![A-Za-z0-9_])(F[1-4]c?|FSc?|A1|AF[12])(?![A-Za-z0-9_])",
+  "benign_phrases_masked": "\\b(?:a\\s+)?(?:\\w+/)?\\w*\\s?fault\\s+(?:was\\s+|is\\s+|has\\s+been\\s+)?injected\\b|\\binjected\\s+fault\\b",
+  "replay_mismatches": [],
+  "hits": [],
+  "passed": true
+}

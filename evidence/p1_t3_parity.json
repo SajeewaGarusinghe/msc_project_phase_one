@@ -1,0 +1,45 @@
+{
+  "test": "P1-T3",
+  "seed": 20261125,
+  "resamples": 10000,
+  "cases": 36,
+  "missing_agent_predictions": [],
+  "arms": {
+    "agent_rebuilt": {
+      "ac1": 0.8056,
+      "ci95_case": [
+        0.6667,
+        0.9167
+      ],
+      "ci95_template": [
+        0.6111,
+        0.9722
+      ],
+      "n": 36
+    },
+    "baro_rebuilt": {
+      "ac1": 0.6389,
+      "ci95_case": [
+        0.4722,
+        0.7778
+      ],
+      "ci95_template": [
+        0.4167,
+        0.8333
+      ],
+      "n": 36
+    },
+    "baro_released": {
+      "ac1": 0.6389,
+      "ci95_case": [
+        0.4722,
+        0.8056
+      ],
+      "ci95_template": [
+        0.4167,
+        0.8333
+      ],
+      "n": 36
+    }
+  }
+}
