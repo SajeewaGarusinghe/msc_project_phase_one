@@ -1,0 +1,13 @@
+{
+  "test": "A4-T1",
+  "date": "2026-11-25",
+  "host_users": {"sealer": "provrca-sealer uid 987", "arm": "provrca-arm uid 986", "runner": "opc"},
+  "layout_modes": {"sealed/": "drwx------ provrca-sealer", "cases/": "drwx--x--x opc",
+                   "cases/<case>/": "drwx--x--x opc", "cases/<case>/<hmac>/": "drwxr-xr-x opc"},
+  "probe_as_arm": {"read_own_variant": "allowed", "open_sealed_file": "denied",
+                   "list_sealed_store": "denied", "list_case_dir": "denied",
+                   "list_cases_root": "denied", "open_guessed_sibling": "not_found"},
+  "arm_identity": "uid=986(provrca-arm) gid=986(provrca-arm) groups=986(provrca-arm)",
+  "pytest": "PROVRCA_REQUIRE_A4=1: 79 passed, 0 skipped; both A4-T1 tests PASSED",
+  "passed": true
+}
