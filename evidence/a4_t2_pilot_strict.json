@@ -1,0 +1,288 @@
+{
+  "test": "A4-T2",
+  "cases": 144,
+  "families": [
+    "F1",
+    "F2",
+    "F3",
+    "clean"
+  ],
+  "prompts_scanned": 144,
+  "tool_outputs_scanned": 2529,
+  "tool_output_chars": 2321971,
+  "trajectory_lines_scanned": 4555,
+  "window_chars": 120,
+  "reveal_words": "\\b(fake[sd]?|faked|injected|fabricat\\w*|forg(?:e|ed|ery|eries)|spoof\\w*|overlay)\\b",
+  "family_codes": "(?<![A-Za-z0-9_])(F[1-4]c?|FSc?|A1|AF[12])(?![A-Za-z0-9_])",
+  "benign_phrases_masked": "\\ba fault was injected into the\\b",
+  "replay_mismatches": [],
+  "hits": [
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:20",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "AZ9AjERL6xTmw4PGdOwjb+1oqvwZk621g=\", \"type\": \"function\", \"function\": {\"name\": \"submit\", \"arguments\": \"{\\\"reasoning\\\": \\\"Emailservice experienced a large increase in errors and latency during order confirmations after the fault was injected, while other"
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:20",
+      "target": "emailservice",
+      "word": "injected",
+      "context": " confirmations after the fault was injected, while other downstream services showed secondary impacts.\\\", \\\"ranks\\\": [\\\"emailservice\\\", \\\"emailservice_latency\\\", \\\"checkoutservice\\\", \\\"frontend\\\", \\\"redis\\\"]}\"}}]} "
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:20",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "er the fault was injected, while other downstream services showed secondary impacts.\\\", \\\"ranks\\\": [\\\"emailservice\\\", \\\"emailservice_latency\\\", \\\"checkoutservice\\\", \\\"frontend\\\", \\\"redis\\\"]}\"}}]} "
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:21",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "{\"type\": \"tool_call\", \"seq\": 15, \"tool\": \"submit\", \"args\": {\"reasoning\": \"Emailservice experienced a large increase in errors and latency during order confirmations after the fault was injected, while other"
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:21",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "rder confirmations after the fault was injected, while other downstream services showed secondary impacts.\", \"ranks\": [\"emailservice\", \"emailservice_latency\", \"checkoutservice\", \"frontend\", \"redis\"]}, \"ok\": true, \"error\": null, \"result_chars\": 32, \"ms\""
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:21",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "ns after the fault was injected, while other downstream services showed secondary impacts.\", \"ranks\": [\"emailservice\", \"emailservice_latency\", \"checkoutservice\", \"frontend\", \"redis\"]}, \"ok\": true, \"error\": null, \"result_chars\": 32, \"ms\": 0} "
+    },
+    {
+      "case_id": "pilot-32e6f6887e",
+      "source": "trajectory:22",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "t-32e6f6887e\", \"ranks\": [\"emailservice\", \"emailservice_latency\", \"checkoutservice\", \"frontend\", \"redis\"], \"reasoning\": \"Emailservice experienced a large increase in errors and latency during order confirmations after the fault was injected, while other"
+    },
+    {
+      "case_id": "pilot-0b7dc237a9",
+      "source": "trajectory:34",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "se_id\": \"pilot-0b7dc237a9\", \"ranks\": [\"currencyservice\", \"currencyservice_cpu\", \"currencyservice_latency\", \"frontend\", \"recommendationservice\"], \"reasoning\": \"The fault was injected at 1705708871, causing a degradation in currencyservice latency and CPU usage, "
+    },
+    {
+      "case_id": "pilot-de5d2060c7",
+      "source": "trajectory:30",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": ", \"arguments\": \"{\\\"ranks\\\": [\\\"currencyservice\\\", \\\"currencyservice_latency\\\", \\\"currencyservice_cpu\\\", \\\"frontend\\\", \\\"recommendationservice\\\"], \\\"reasoning\\\": \\\"A fault was injected into currencyservice causing increased latency and CPU usage, which propagate"
+    },
+    {
+      "case_id": "pilot-de5d2060c7",
+      "source": "trajectory:31",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": " \"tool\": \"submit\", \"args\": {\"ranks\": [\"currencyservice\", \"currencyservice_latency\", \"currencyservice_cpu\", \"frontend\", \"recommendationservice\"], \"reasoning\": \"A fault was injected into currencyservice causing increased latency and CPU usage, which propagated to"
+    },
+    {
+      "case_id": "pilot-de5d2060c7",
+      "source": "trajectory:32",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "se_id\": \"pilot-de5d2060c7\", \"ranks\": [\"currencyservice\", \"currencyservice_latency\", \"currencyservice_cpu\", \"frontend\", \"recommendationservice\"], \"reasoning\": \"A fault was injected into currencyservice causing increased latency and CPU usage, which propagated to"
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:17",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "\", \"function\": {\"name\": \"submit\", \"arguments\": \"{\\\"ranks\\\": [\\\"checkoutservice\\\", \\\"checkoutservice_cpu\\\", \\\"redis\\\", \\\"paymentservice\\\", \\\"frontend\\\"], \\\"reasoning\\\": \\\"The fault injected at 1705664091 causes a significant spike in checkoutservice CPU a"
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:17",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "he fault injected at 1705664091 causes a significant spike in checkoutservice CPU and latency, and connection errors in paymentservice, identifying checkoutservice as the core service experiencing the issue.\\\"}\"}}]} "
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:18",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "type\": \"tool_call\", \"seq\": 12, \"tool\": \"submit\", \"args\": {\"ranks\": [\"checkoutservice\", \"checkoutservice_cpu\", \"redis\", \"paymentservice\", \"frontend\"], \"reasoning\": \"The fault injected at 1705664091 causes a significant spike in checkoutservice CPU and lat"
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:18",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "he fault injected at 1705664091 causes a significant spike in checkoutservice CPU and latency, and connection errors in paymentservice, identifying checkoutservice as the core service experiencing the issue.\"}, \"ok\": true, \"error\": null, \"result_chars\": "
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:19",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "{\"type\": \"result\", \"case_id\": \"pilot-7ba0da3ef3\", \"ranks\": [\"checkoutservice\", \"checkoutservice_cpu\", \"redis\", \"paymentservice\", \"frontend\"], \"reasoning\": \"The fault injected at 1705664091 causes a significant spike in checkoutservice CPU and lat"
+    },
+    {
+      "case_id": "pilot-7ba0da3ef3",
+      "source": "trajectory:19",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "he fault injected at 1705664091 causes a significant spike in checkoutservice CPU and latency, and connection errors in paymentservice, identifying checkoutservice as the core service experiencing the issue.\", \"model\": \"gemini/gemini-3.5-flash-lite\", \"pr"
+    },
+    {
+      "case_id": "pilot-6149ec2723",
+      "source": "trajectory:36",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "ame\": \"submit\", \"arguments\": \"{\\\"ranks\\\": [\\\"currencyservice\\\", \\\"currencyservice_latency\\\", \\\"frontend\\\", \\\"redis\\\", \\\"recommendationservice\\\"], \\\"reasoning\\\": \\\"A latency fault was injected into currencyservice at 1705704343, causing currency conversion calls"
+    },
+    {
+      "case_id": "pilot-6149ec2723",
+      "source": "trajectory:37",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "l\", \"seq\": 27, \"tool\": \"submit\", \"args\": {\"ranks\": [\"currencyservice\", \"currencyservice_latency\", \"frontend\", \"redis\", \"recommendationservice\"], \"reasoning\": \"A latency fault was injected into currencyservice at 1705704343, causing currency conversion calls fro"
+    },
+    {
+      "case_id": "pilot-6149ec2723",
+      "source": "trajectory:38",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": " \"result\", \"case_id\": \"pilot-6149ec2723\", \"ranks\": [\"currencyservice\", \"currencyservice_latency\", \"frontend\", \"redis\", \"recommendationservice\"], \"reasoning\": \"A latency fault was injected into currencyservice at 1705704343, causing currency conversion calls fro"
+    },
+    {
+      "case_id": "pilot-e15b7f867b",
+      "source": "trajectory:30",
+      "target": "emailservice",
+      "word": "injected",
+      "context": " \"{\\\"reasoning\\\": \\\"The fault is injected into shippingservice, causing latency spikes and cascading timeouts affecting emailservice and checkoutservice.\\\", \\\"ranks\\\": [\\\"shippingservice\\\", \\\"shippingservice_latency\\\", \\\"emailservice\\\", \\\"checkoutservi"
+    },
+    {
+      "case_id": "pilot-e15b7f867b",
+      "source": "trajectory:31",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "gs\": {\"reasoning\": \"The fault is injected into shippingservice, causing latency spikes and cascading timeouts affecting emailservice and checkoutservice.\", \"ranks\": [\"shippingservice\", \"shippingservice_latency\", \"emailservice\", \"checkoutservice\", \"redi"
+    },
+    {
+      "case_id": "pilot-e15b7f867b",
+      "source": "trajectory:32",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "{\"type\": \"result\", \"case_id\": \"pilot-e15b7f867b\", \"ranks\": [\"shippingservice\", \"shippingservice_latency\", \"emailservice\", \"checkoutservice\", \"redis\"], \"reasoning\": \"The fault is injected into shippingservice, causing latency spikes and cas"
+    },
+    {
+      "case_id": "pilot-e15b7f867b",
+      "source": "trajectory:32",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "is\"], \"reasoning\": \"The fault is injected into shippingservice, causing latency spikes and cascading timeouts affecting emailservice and checkoutservice.\", \"model\": \"gemini/gemini-3.5-flash-lite\", \"prompt_version\": \"2\", \"stop_reason\": \"submit\", \"usage\""
+    },
+    {
+      "case_id": "pilot-d4748067ca",
+      "source": "trajectory:23",
+      "target": "paymentservice",
+      "word": "injected",
+      "context": "\": \"result\", \"case_id\": \"pilot-d4748067ca\", \"ranks\": [\"checkoutservice\", \"checkoutservice_mem\", \"checkoutservice_cpu\", \"paymentservice\", \"redis\"], \"reasoning\": \"The injected fault targets checkoutservice, causing extreme memory consumption, elevated CPU "
+    },
+    {
+      "case_id": "pilot-ee84ce27b9",
+      "source": "trajectory:30",
+      "target": "checkoutservice",
+      "word": "injected",
+      "context": "{\"type\": \"result\", \"case_id\": \"pilot-ee84ce27b9\", \"ranks\": [\"currencyservice\", \"currencyservice_mem\", \"frontend\", \"checkoutservice\", \"recommendationservice\"], \"reasoning\": \"The fault is injected into currencyservice, causing a massive memory spike an"
+    },
+    {
+      "case_id": "pilot-f78e0d9de2",
+      "source": "trajectory:44",
+      "target": "checkoutservice",
+      "word": "injected",
+      "context": "s\": \"{\\\"ranks\\\": [\\\"currencyservice\\\", \\\"currencyservice_mem\\\", \\\"currencyservice_cpu\\\", \\\"currencyservice_latency\\\", \\\"checkoutservice\\\"], \\\"reasoning\\\": \\\"A memory/resource fault was injected into currencyservice at the inject time, causing its memory u"
+    },
+    {
+      "case_id": "pilot-f78e0d9de2",
+      "source": "trajectory:45",
+      "target": "checkoutservice",
+      "word": "injected",
+      "context": "ubmit\", \"args\": {\"ranks\": [\"currencyservice\", \"currencyservice_mem\", \"currencyservice_cpu\", \"currencyservice_latency\", \"checkoutservice\"], \"reasoning\": \"A memory/resource fault was injected into currencyservice at the inject time, causing its memory usage"
+    },
+    {
+      "case_id": "pilot-f78e0d9de2",
+      "source": "trajectory:46",
+      "target": "checkoutservice",
+      "word": "injected",
+      "context": "lot-f78e0d9de2\", \"ranks\": [\"currencyservice\", \"currencyservice_mem\", \"currencyservice_cpu\", \"currencyservice_latency\", \"checkoutservice\"], \"reasoning\": \"A memory/resource fault was injected into currencyservice at the inject time, causing its memory usage"
+    },
+    {
+      "case_id": "pilot-dff1432972",
+      "source": "trajectory:40",
+      "target": "checkoutservice",
+      "word": "injected",
+      "context": "\": \"result\", \"case_id\": \"pilot-dff1432972\", \"ranks\": [\"currencyservice\", \"currencyservice_mem\", \"currencyservice_cpu\", \"checkoutservice\", \"frontend\"], \"reasoning\": \"The fault was injected into currencyservice, causing a memory leak and high resource conte"
+    },
+    {
+      "case_id": "pilot-adec267ffb",
+      "source": "trajectory:30",
+      "target": "currencyservice",
+      "word": "injected",
+      "context": "enced a massive surge in errors right after the inject time (1705623539), indicating a fault injected into or affecting currencyservice.\\\"}\"}}]} "
+    },
+    {
+      "case_id": "pilot-adec267ffb",
+      "source": "trajectory:31",
+      "target": "currencyservice",
+      "word": "injected",
+      "context": "enced a massive surge in errors right after the inject time (1705623539), indicating a fault injected into or affecting currencyservice.\"}, \"ok\": true, \"error\": null, \"result_chars\": 32, \"ms\": 0} "
+    },
+    {
+      "case_id": "pilot-adec267ffb",
+      "source": "trajectory:32",
+      "target": "currencyservice",
+      "word": "injected",
+      "context": "enced a massive surge in errors right after the inject time (1705623539), indicating a fault injected into or affecting currencyservice.\", \"model\": \"gemini/gemini-3.5-flash-lite\", \"prompt_version\": \"2\", \"stop_reason\": \"submit\", \"usage\": {\"input_tokens\": 6"
+    },
+    {
+      "case_id": "pilot-8483e63673",
+      "source": "trajectory:20",
+      "target": "emailservice",
+      "word": "injected",
+      "context": "\": \"result\", \"case_id\": \"pilot-8483e63673\", \"ranks\": [\"checkoutservice\", \"checkoutservice_cpu\", \"checkoutservice_mem\", \"emailservice\", \"redis\", \"frontend\", \"paymentservice\", \"shippingservice\"], \"reasoning\": \"The fault injected at 1705656313 caused a sh"
+    },
+    {
+      "case_id": "pilot-be81959778",
+      "source": "trajectory:24",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "\": \"result\", \"case_id\": \"pilot-be81959778\", \"ranks\": [\"checkoutservice\", \"checkoutservice_cpu\", \"checkoutservice_mem\", \"recommendationservice\", \"cartservice\", \"redis\"], \"reasoning\": \"The fault injected into checkoutservice caused a significant increase in its C"
+    },
+    {
+      "case_id": "pilot-f156bb42c1",
+      "source": "trajectory:23",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "\", \"function\": {\"name\": \"submit\", \"arguments\": \"{\\\"ranks\\\": [\\\"currencyservice_mem\\\", \\\"currencyservice\\\", \\\"redis\\\", \\\"recommendationservice\\\", \\\"cartservice\\\"], \\\"reasoning\\\": \\\"Analysis of metrics and anomalies points to a memory fault injected into currency"
+    },
+    {
+      "case_id": "pilot-f156bb42c1",
+      "source": "trajectory:24",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "type\": \"tool_call\", \"seq\": 17, \"tool\": \"submit\", \"args\": {\"ranks\": [\"currencyservice_mem\", \"currencyservice\", \"redis\", \"recommendationservice\", \"cartservice\"], \"reasoning\": \"Analysis of metrics and anomalies points to a memory fault injected into currencyservic"
+    },
+    {
+      "case_id": "pilot-f156bb42c1",
+      "source": "trajectory:25",
+      "target": "recommendationservice",
+      "word": "injected",
+      "context": "{\"type\": \"result\", \"case_id\": \"pilot-f156bb42c1\", \"ranks\": [\"currencyservice_mem\", \"currencyservice\", \"redis\", \"recommendationservice\", \"cartservice\"], \"reasoning\": \"Analysis of metrics and anomalies points to a memory fault injected into currencyservic"
+    }
+  ],
+  "passed": false
+}
