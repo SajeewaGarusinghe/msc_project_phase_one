@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from provrca_bench.framebench.build import FAMILIES, build_variant
+from provrca_bench.framebench.build import FAMILIES, T1_FAMILIES, build_variant
 from provrca_bench.framebench.case import CleanCase, load_dev_cases
 from provrca_bench.framebench.doses import DOSES
 from provrca_bench.framebench.target import checks_as_rows, draw_target
@@ -29,18 +29,22 @@ from provrca_bench.framebench.target import checks_as_rows, draw_target
 def _one_case(case: CleanCase, seed: int, out: Path, sealed: Path) -> tuple[list[dict], list[dict]]:
     target, checks = draw_target(case, seed)
     rows = []
-    jobs = [("clean", "high")] + [(f, d) for f in FAMILIES if f != "clean" for d in DOSES]
-    for family, dose in jobs:
+    jobs = ([("clean", "T2", "high")] + [(f, "T2", d) for f in FAMILIES if f != "clean" for d in DOSES]
+            + [(f, "T1", d) for f in sorted(T1_FAMILIES) for d in DOSES])
+    for family, threat, dose in jobs:
         if target is None and family != "clean":
             continue
         t0 = time.time()
-        r = build_variant(case, target=target, family=family, dose_level=dose, seed=seed,
+        r = build_variant(case, target=target, family=family, threat=threat, dose_level=dose, seed=seed,
                           out_root=out, sealed_root=sealed, checks=checks)
-        rows.append({"case_id": case.case_id, "variant": r.variant, "family": family,
+        rows.append({"case_id": case.case_id, "variant": r.variant, "family": family, "threat": threat,
                      "dose": dose if family != "clean" else "", "target": target or "",
                      "edited_spans": r.edited, "injected_lines": r.injected,
                      "labels": len(r.labels),
                      "f3_factor": r.dose.f3_factor if r.dose else "",
+                     "achieved_p95_ratio": r.extra.get("achieved_p95_ratio", ""),
+                     "achieved_post_nonok_share": r.extra.get("achieved_post_nonok_share", ""),
+                     "t1_written": r.extra.get("t1_written", ""),
                      "seconds": round(time.time() - t0, 1)})
     return checks_as_rows(case, checks, target), rows
 
