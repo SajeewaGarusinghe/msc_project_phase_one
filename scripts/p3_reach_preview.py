@@ -22,7 +22,7 @@ from provrca_bench.provrca.rules import Config
 REPO = Path(__file__).resolve().parents[1]
 GEN = Path(os.environ.get("PROVRCA_FRAMEBENCH_ROOT", REPO / "cases" / "framebench-dev"))
 SEALED = Path(os.environ.get("PROVRCA_FRAMEBENCH_SEALED", REPO / "sealed" / "framebench-dev"))
-FAMILIES = ("F2", "F3", "FS", "F3c")
+FAMILIES = ("F2", "F3", "FS", "F3c", "F2c", "FSc", "F2cD")
 
 
 def one(case_id: str) -> list[dict]:

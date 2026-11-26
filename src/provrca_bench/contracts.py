@@ -113,7 +113,7 @@ class LabelRecord(_Strict):
     case_id: str = Field(min_length=1)
     variant: str = Field(min_length=1, description="family-threat-dose-seed, as the directory name")
     target: ServiceName
-    family: Literal["F1", "F2", "F3", "F4", "FS", "F2c", "F3c", "FSc", "A1", "AF1", "AF2"]
+    family: Literal["F1", "F2", "F3", "F4", "FS", "F2c", "F3c", "FSc", "F2cD", "A1", "AF1", "AF2"]
     threat_model: Literal["T1", "T2"]
     dose: str = Field(min_length=1, description="high or low, fixed from the P0 pilot")
     seed: int
@@ -131,9 +131,12 @@ class LabelRecord(_Strict):
         description="the same rule's conditions on the clean, pre-overlay pair "
                     "(provrca.chain.applicability_in_clean); for a T1 forged pair, on the "
                     "constructed pair judged with attribution off")
-    escape: Literal["none", "R1_cap", "rule_not_applicable", "witness", "no_log_rule", "T6_drop",
-                    "dangling", "role_field", "dup_id", "client_generated"] | None = Field(
-        default=None, description="how the forgery stays out of a rule's reach, if it does")
+    escape: Literal["none", "R1_cap", "rule_not_applicable", "witness", "no_log_rule",
+                    "witness_unlinked", "code_range"] | None = Field(
+        default=None, description="how the forgery stays out of a rule's reach, if it does: "
+                    "R1_cap (F3c: under the caller's wait), rule_not_applicable (no rule for the "
+                    "clean pair), witness_unlinked (F2c/FSc: parentSpanID replaced by an id not in "
+                    "the file), code_range (F2cD, dev-only: a status outside gRPC's 0-16)")
 
     _check_service = field_validator("target")(_no_underscore)
 
