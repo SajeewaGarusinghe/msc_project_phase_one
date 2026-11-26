@@ -91,10 +91,23 @@ def test_traces_writer_keeps_genuine_lines_and_edits_only_named_spans(tmp_path):
     assert lines[2] == '18:35,t1,s2,cartservice,GetCart,"a,b",1000,1000001,70,13.0,s1,cartservice'
 
 
-@pytest.mark.xfail(strict=True, reason="F2c and FSc are built in step 4b, after their escape routes "
-                   "are chosen by distinguishability on development data")
-def test_p2_t6_f2c_and_fsc_pass_the_rules_by_construction():
-    assert {"F2c", "FSc"} <= set(fb.FAMILIES)
+def test_p2_t6_f2c_and_fsc_are_built_with_their_escape():
+    """F2c/FSc cut the witness link (route A); F2cD writes an out-of-range code (route D, dev-only).
+    That they pass the rules by construction is checked on real overlays in test_p2_t6.py."""
+    assert {"F2c", "FSc", "F2cD"} <= set(fb.FAMILIES)
+    assert fb.BASE_OF == {"F2c": "F2", "FSc": "FS", "F2cD": "F2"}
+    assert fb.ESCAPE_OF["F2c"] == fb.ESCAPE_OF["FSc"] == "witness_unlinked"
+    assert not 0 <= fb.F2CD_CODE <= 16
+
+
+def test_traces_writer_replaces_the_parent_for_an_unlinked_span(tmp_path):
+    src = tmp_path / "in.csv"
+    src.write_text("time,traceID,spanID,serviceName,methodName,operationName,startTimeMillis,"
+                   "startTime,duration,statusCode,parentSpanID\n"
+                   "18:35,t1,s2,cartservice,GetCart,op,1000,1000001,7,0.0,s1\n")
+    dst = tmp_path / "out.csv"
+    fb._write_traces(src, dst, {"s2": {"statusCode": "13.0", "parentSpanID": "ffff"}})
+    assert dst.read_text().splitlines()[1] == "18:35,t1,s2,cartservice,GetCart,op,1000,1000001,7,13.0,ffff,cartservice"
 
 
 # --------------------------------------------------------------------------------------------
@@ -189,7 +202,7 @@ def test_p2_t3_the_target_is_never_the_root_cause_and_every_check_is_recorded():
 @real
 @pytest.mark.skipif(not os.environ.get("PROVRCA_HARNESS_PYTHON"),
                     reason="P2-T4 rebuilds a variant and needs PROVRCA_HARNESS_PYTHON")
-@pytest.mark.parametrize("family,threat", [("FS", "T2"), ("F3c", "T2"), ("F3", "T1")])
+@pytest.mark.parametrize("family,threat", [("FS", "T2"), ("F3c", "T2"), ("F3", "T1"), ("FSc", "T2")])
 def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path, family, threat):
     from provrca_bench.framebench.case import load_dev_cases
     from provrca_bench.framebench.target import draw_target
@@ -242,3 +255,18 @@ def test_no_case_file_names_the_family_dose_or_seed(row):
                  "cluster_info.json"):
         head = (case_dir / name).read_bytes()[:4096].decode(errors="ignore")
         assert row["variant"] not in head and f"-{seed}" not in head
+
+
+def test_distinguish_features_see_an_unlinked_span_and_take_context_from_the_whole_case():
+    from provrca_bench.framebench import distinguish as d
+    df = pd.DataFrame({"traceID": ["t", "t", "t"], "spanID": ["a", "b", "c"],
+                       "serviceName": ["checkoutservice", "paymentservice", "paymentservice"],
+                       "methodName": ["Charge", "Charge", "Charge"],
+                       "operationName": ["op", "op", "op"], "startTime": [1, 2, 3],
+                       "duration": [10, 5, 5], "statusCode": [0.0, 0.0, 269.0],
+                       "parentSpanID": [None, "a", "zz"]})
+    f = d.features(df, df.index[1:], inject=0)
+    assert list(f.parent_in_file) == [1, 0] and list(f.is_server) == [1, 0]
+    assert list(f.method_eq_parent) == [1, 0] and list(f.code_in_grpc_range) == [1, 0]
+    assert list(f.trace_size) == [3, 3], "trace size comes from the whole case, not the subset"
+    assert set(d.FORGED) == {"F2", "F2cD", "FS", "F2c", "FSc"}

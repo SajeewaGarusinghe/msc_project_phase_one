@@ -2,13 +2,14 @@
 for: the generator's labels are compared with the chain's verdicts on the overlay. This is a
 *test*, never a label source; the labels come from what the generator did.
 
-* F3c (T2): every forged span is compatible or unknown under D4 -- never contradicted.
+* F3c, F2c, FSc, F2cD (T2): every forged span is compatible or unknown under D4 -- never
+  contradicted or rejected; every F2c/FSc forged span is NO_WITNESS (the witness link is cut).
 * T1-F2, T1-F3: with attribution off every forged server span is compatible (the forged pair
   confirms itself); with attribution on every forged record is rejected.
 * Labels: for every labelled claim, ``rule_applicable`` equals "the targeted rule was applied"
   in the overlay judged with attribution off.
 
-F2c and FSc stay a strict xfail in ``test_framebench.py`` until step 4b. Runs on every 4th
+Runs on every 4th
 development case (``PROVRCA_FULL=1`` for all 36).
 """
 from __future__ import annotations
@@ -31,7 +32,9 @@ SEALED = Path(os.environ.get("PROVRCA_FRAMEBENCH_SEALED", REPO / "sealed" / "fra
 INDEX = SEALED / "index.csv"
 WORKERS = int(os.environ.get("PROVRCA_WORKERS", "6"))
 APPLIED = {"r1": ("OK_ENCLOSED", "R1_ENCLOSURE_FAIL"), "r2": ("OK_STATUS", "R2_STATUS_CONFLICT")}
-RULES = {"F2": ("r2",), "F3": ("r1",), "F3c": ("r1",), "FS": ("r1", "r2")}
+RULES = {"F2": ("r2",), "F3": ("r1",), "F3c": ("r1",), "FS": ("r1", "r2"),
+         "F2c": ("r2",), "FSc": ("r1", "r2"), "F2cD": ("r2",)}
+ADAPTIVE = {"F3c", "F2c", "FSc", "F2cD"}
 
 
 def _rows():
@@ -66,7 +69,7 @@ def _check(row: dict) -> tuple[str, list[str]]:
         applied = any(getattr(r, f"{k}_reason") in APPLIED[k] for k in RULES[row["family"]])
         if lab["rule_applicable"] != applied:
             problems.append(f"{r.record_id}: label {lab['rule_applicable']} but applied={applied}")
-    if row["family"] == "F3c" or row["threat"] == "T1":
+    if row["family"] in ADAPTIVE or row["threat"] == "T1":
         on = judge_spans(t, cfg, attribution=True)
         on = on[on.record_id.isin(spans)]
         if row["threat"] == "T1":
@@ -77,7 +80,9 @@ def _check(row: dict) -> tuple[str, list[str]]:
                 problems.append(f"T1 with attribution: {Counter(on.verdict)}")
         else:
             if on.verdict.isin(["contradicted", "rejected"]).any():
-                problems.append(f"F3c: {Counter(on.verdict)}")
+                problems.append(f"{row['family']}: {Counter(on.verdict)}")
+            if row["family"] in ("F2c", "FSc") and not (on.reason == "NO_WITNESS").all():
+                problems.append(f"{row['family']} not unlinked: {Counter(on.reason)}")
     return v, problems[:5]
 
 
@@ -87,4 +92,5 @@ def test_p2_t6_constructions_and_labels():
     with ProcessPoolExecutor(WORKERS) as pool:
         res = {f"{r['case_id']}/{v}": p for r, (v, p) in zip(todo, pool.map(_check, todo))}
     assert {k: v for k, v in res.items() if v} == {}
-    assert any("-T1-" in k for k in res) and any(k.split("/")[1].startswith("F3c") for k in res)
+    fams = {k.split("/")[1].split("-")[0] for k in res}
+    assert any("-T1-" in k for k in res) and ADAPTIVE <= fams

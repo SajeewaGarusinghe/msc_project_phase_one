@@ -45,11 +45,20 @@ from provrca_bench.framebench.case import CleanCase, log_name
 from provrca_bench.framebench.doses import CaseDose, dose_for
 from provrca_bench.framebench.target import CandidateCheck, seed_for
 
-FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1", "F3c")
-SPAN_FAMILIES = {"F2", "F3", "FS", "F3c"}
+FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1", "F3c", "F2c", "FSc", "F2cD")
+SPAN_FAMILIES = {"F2", "F3", "FS", "F3c", "F2c", "FSc", "F2cD"}
 T1_FAMILIES = {"F2", "F3"}
 #: the rule each span family's forgery targets (label ``rule_applicable``)
-RULE_OF = {"F2": ("r2",), "F3": ("r1",), "F3c": ("r1",), "FS": ("r1", "r2")}
+RULE_OF = {"F2": ("r2",), "F3": ("r1",), "F3c": ("r1",), "FS": ("r1", "r2"),
+           "F2c": ("r2",), "FSc": ("r1", "r2"), "F2cD": ("r2",)}
+# Step 4b (decisions log 26 Nov). F2c/FSc are F2/FS with the witness link cut: the forged server
+# span's parentSpanID is replaced by a fresh id that is not in the file (route A, the cause of real
+# sampling loss), so the matcher finds no caller attempt. F2cD is a development-only descriptive
+# variant (route D): F2's spans with a status outside gRPC's 0-16, which R2 treats as unknown. It
+# repeats the K22 value defect and is never used in E2.
+BASE_OF = {"F2c": "F2", "FSc": "FS", "F2cD": "F2"}
+ESCAPE_OF = {"F2c": "witness_unlinked", "FSc": "witness_unlinked", "F2cD": "code_range"}
+F2CD_CODE = 269            # 13 + 2**8: outside 0-16, not an HTTP-looking value; recorded, not tuned
 LOG_FAMILIES = {"F1", "F4", "A1"}
 HARDLINK = ("metrics.csv", "simple_metrics.csv", "metrics_postprocess.log",
             "pod-node-1.csv", "pod-node-2.csv")
@@ -94,8 +103,10 @@ class BuildResult:
 
 def _span_edits(case: CleanCase, target: str, family: str, dose: CaseDose,
                 rng: np.random.Generator) -> dict[str, dict]:
-    """spanID -> {"duration": int} and/or {"statusCode": str}, on the target's post-fault server
-    spans inside the standard window."""
+    """spanID -> {"duration": int} and/or {"statusCode": str} (and {"parentSpanID": str} for
+    F2c/FSc), on the target's post-fault server spans inside the standard window."""
+    variant_of = family
+    family = BASE_OF.get(family, family)
     start_us, end_us = case.inject_time * 1_000_000, case.window[1] * 1_000_000
     s = case.server_spans(target)
     s = s[(s.startTime >= start_us) & (s.startTime < end_us)]
@@ -115,7 +126,23 @@ def _span_edits(case: CleanCase, target: str, family: str, dose: CaseDose,
         if family == "FS" and dose.f3_factor > 1:
             e["duration"] = int(round(dur[sid] * dose.f3_factor))
         edits[sid] = e
+    if variant_of == "F2cD":
+        for e in edits.values():
+            e["statusCode"] = f"{float(F2CD_CODE)}"
+    elif variant_of in ("F2c", "FSc"):
+        taken = set(case.spans.spanID.astype(str)) | set(case.spans.parentSpanID.dropna().astype(str))
+        for sid in edits:
+            new = _fresh_id(rng, taken)
+            taken.add(new)
+            edits[sid]["parentSpanID"] = new
     return edits
+
+
+def _fresh_id(rng: np.random.Generator, taken: set[str]) -> str:
+    while True:
+        new = "".join(f"{int(x):02x}" for x in rng.integers(0, 256, size=8))
+        if new not in taken:
+            return new
 
 
 def _level_case(levels: pd.Series) -> str:
@@ -168,6 +195,7 @@ def _write_traces(src: Path, dst: Path, edits: dict[str, dict],
         cols = header.split(",")
         i_sid, i_svc = cols.index("spanID"), cols.index("serviceName")
         i_dur, i_code = cols.index("duration"), cols.index("statusCode")
+        i_par = cols.index("parentSpanID")
         fout.write(header + ",sender\n")
         for row_no, line in enumerate(fin):
             raw = line.rstrip("\r\n")
@@ -178,6 +206,8 @@ def _write_traces(src: Path, dst: Path, edits: dict[str, dict],
                     f[i_dur] = str(e["duration"])
                 if "statusCode" in e:
                     f[i_code] = e["statusCode"]
+                if "parentSpanID" in e:
+                    f[i_par] = e["parentSpanID"]
                 buf = io.StringIO()
                 csv.writer(buf, lineterminator="").writerow(f)
                 raw = buf.getvalue()
@@ -211,6 +241,11 @@ def _achieved(case: CleanCase, out: Path, target: str) -> dict:
     ov = CleanCase(case_id=case.case_id, case_dir=out, task=case.task, root_cause=case.root_cause,
                    fault=case.fault, template=case.template)
     lo, hi = case.inject_time * 1_000_000, case.window[1] * 1_000_000
+    # F2c/FSc unlink their spans from the caller, so the overlay no longer sees them as server
+    # spans; the dose is still measured on them (by their clean server-span ids).
+    sp = ov.spans
+    sp["is_server"] = sp.is_server | ((sp.serviceName == target)
+                                      & sp.spanID.isin(case.server_spans(target).spanID))
     s = ov.server_spans(target)
     s = s[(s.startTime >= lo) & (s.startTime < hi)]
     share = float((s.statusCode.fillna(0) != 0).mean()) if len(s) else None
@@ -270,6 +305,8 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
         res.extra["f3c_gap_source"] = sorted(f3c.gap_source)
     elif family in SPAN_FAMILIES:
         edits = _span_edits(case, target, family, dose, rng)
+        if family in ESCAPE_OF:
+            escape = {sid: ESCAPE_OF[family] for sid in edits}
     if edits:
         spans_before = case.spans.set_index("spanID").loc[list(edits)]
     res.edited = _write_traces(case.case_dir / "traces.csv", out / "traces.csv", edits,
