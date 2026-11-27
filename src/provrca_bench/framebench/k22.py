@@ -216,7 +216,10 @@ def one_case(args) -> tuple[list[pd.DataFrame], list[dict]]:
         if fam in LOGS:
             lg = pd.read_csv(cdir / v / "logs.csv", dtype=str, keep_default_na=False, low_memory=False)
             lg["_dup"] = _dups(lg)
-            stamps = {int(l["record_id"].split(":")[1]) for l in labels}
+            # round 2: F1/F4 companion lines (escape "witness") are neither positives nor
+            # negatives; without them (v1, round 1, A1) this is the old rule exactly
+            stamps = {int(l["record_id"].split(":")[1]) for l in labels if l["escape"] != "witness"}
+            wit = {int(l["record_id"].split(":")[1]) for l in labels if l["escape"] == "witness"}
             ts = lg.timestamp.astype("int64")
             mine = (lg.container_name == log_name(target)).to_numpy()
             lo_s, hi_s = ((inject - F4_WINDOW[0], inject - F4_WINDOW[1]) if fam == "F4"
@@ -224,8 +227,9 @@ def one_case(args) -> tuple[list[pd.DataFrame], list[dict]]:
             inwin = ((ts // 10**9 >= lo_s) & (ts // 10**9 < hi_s)).to_numpy()
             is_pos = ts.isin(stamps).to_numpy() & mine
             pos = np.flatnonzero(is_pos)
-            neg = np.flatnonzero(mine & inwin & ~is_pos)
-            unl = lg.log_template[mine & ~is_pos].astype(str).value_counts()
+            is_wit = ts.isin(wit).to_numpy() & mine
+            neg = np.flatnonzero(mine & inwin & ~is_pos & ~is_wit)
+            unl = lg.log_template[mine & ~is_pos & ~is_wit].astype(str).value_counts()
             n = min(len(pos), len(neg), MAX_PER_CLASS_PER_CASE)
             recov.append({**meta, "variant": v, "labelled": len(stamps), "found": len(pos),
                           "pool": len(neg), "used": n, "pool_rule": "same_file"})

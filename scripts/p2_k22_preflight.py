@@ -7,10 +7,16 @@ and compares the inserted records with the genuine ones of the same file:
   within 1 s (K22's ``dup_msg_1s``), with any other line of the container within 1 ms
   (``near_1ms``), and whose exact message appears elsewhere in the window (``dup_window``).
   Pre-registered check: |forged - genuine| <= 0.05 for ``dup_msg_1s`` and ``near_1ms``.
+  Round 2 (review change 5): also the single-feature AUC, forged vs genuine (genuine sampled to
+  the forged count per case, as K22 does), of K22's ``episode_size``, ``near_gap_log10``,
+  ``offset_s`` and ``dup_msg_1s``; check |AUC - 0.5| <= 0.03 pooled per family and dose, reported
+  per target service. F1/F4 companion lines are neither forged nor genuine.
 * T1 (F2, F3; both doses): replayed traces that are exact twins of a genuine trace (duration vector
   and relative offsets), against the genuine rate among genuine traces of >= 10 spans (check:
   <= genuine + 0.01); claims' ``n_children`` and ``trace_size`` against the genuine target server
-  spans; per-service volume ratio, and the root cause's (reported; the cap is off).
+  spans; per-service volume ratio, and the root cause's (reported; the cap is off). Round 2: the
+  single-feature AUC of K22's ``burst_100ms`` and ``load_1s`` and of "another target server start
+  within 5 ms", claims vs genuine target server spans in the window (same check, pooled).
 
     uv run python scripts/p2_k22_preflight.py --out <dir> [--cases re2-ob-0001 ...]
 """
@@ -26,7 +32,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from provrca_bench.framebench import adaptive, build as fb
+from sklearn.metrics import roc_auc_score
+
+from provrca_bench.framebench import adaptive, build as fb, k22
 from provrca_bench.framebench.case import load_dev_cases, log_name
 from provrca_bench.framebench.doses import dose_for
 from provrca_bench.framebench.target import seed_for
@@ -92,9 +100,14 @@ def summarise_logs(logs: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
     return pd.DataFrame(rows).round(3), ok
 
 
-def logs_case(case, target) -> list[dict]:
+LOG_AUC = ["episode_size", "near_gap_log10", "offset_s", "dup_msg_1s"]
+SPAN_AUC = ["burst_100ms", "load_1s", "nn_5ms"]
+AUC_TOL = 0.03
+
+
+def logs_case(case, target) -> tuple[list[dict], list[pd.DataFrame]]:
     logs = pd.read_csv(case.case_dir / "logs.csv", low_memory=False, keep_default_na=False)
-    out = []
+    out, feats = [], []
     for family in ("F1", "F4", "A1"):
         for level in ("high", "low"):
             dose = dose_for(case, target, level)
@@ -104,6 +117,7 @@ def logs_case(case, target) -> list[dict]:
             if not ins:
                 continue
             new = pd.DataFrame(ins)
+            wit = new.get("_witness", pd.Series(False, index=new.index)).astype(bool)
             lg = pd.concat([logs, new[logs.columns]], ignore_index=True)
             lg = lg[lg.container_name == log_name(target)].copy()
             lg["_ts"] = lg.timestamp.astype("int64")
@@ -111,11 +125,29 @@ def logs_case(case, target) -> list[dict]:
                       else (case.inject_time, case.window[1]))
             sec = lg._ts // 10**9
             lg = lg[(sec >= lo) & (sec < hi)].reset_index(drop=True)
-            forged = lg._ts.isin(set(new.timestamp)).to_numpy()
-            for kind, rows in (("forged", np.flatnonzero(forged)), ("genuine", np.flatnonzero(~forged))):
+            forged = lg._ts.isin(set(new.timestamp[~wit])).to_numpy()
+            comp = lg._ts.isin(set(new.timestamp[wit])).to_numpy()
+            for kind, rows in (("forged", np.flatnonzero(forged)),
+                               ("genuine", np.flatnonzero(~forged & ~comp))):
                 out.append({"case_id": case.case_id, "target": target, "family": family,
                             "dose": level, "kind": kind, **_log_stats(lg, rows)})
-    return out
+            # K22's own feature code on the same frame (the container, in the window)
+            lg["_dup"] = k22._dups(lg)
+            allm = np.ones(len(lg), dtype=bool)
+            pos = np.flatnonzero(forged)
+            gen = np.flatnonzero(~forged & ~comp)
+            gen = np.sort(rng.choice(gen, min(len(gen), len(pos)), replace=False))
+            for y, rows in ((1, pos), (0, gen)):
+                f = pd.concat([k22.log_features(lg, rows, pd.Series(dtype=int), case.inject_time,
+                                                bool(y)),
+                               k22.log_supp(lg, allm, allm, rows)], axis=1)
+                f = f[LOG_AUC]
+                f.insert(0, "y", y)
+                for k2, v2 in (("case_id", case.case_id), ("target", target), ("family", family),
+                               ("dose", level)):
+                    f.insert(0, k2, v2)
+                feats.append(f)
+    return out, feats
 
 
 def _shape(df: pd.DataFrame) -> tuple:
@@ -123,7 +155,7 @@ def _shape(df: pd.DataFrame) -> tuple:
     return tuple(np.r_[df.duration.astype("int64").to_numpy(), st - st.min()])
 
 
-def t1_case(case, target) -> list[dict]:
+def t1_case(case, target) -> tuple[list[dict], list[pd.DataFrame]]:
     tr = adaptive._clean_frame(str(case.case_dir))
     lo, hi = case.inject_time * 10**6, case.window[1] * 10**6
     st = tr.startTime.astype("int64")
@@ -133,8 +165,9 @@ def t1_case(case, target) -> list[dict]:
     shapes = gen[gen.traceID.isin(big)].groupby("traceID", sort=False).apply(_shape)
     gen_twin = float(shapes.duplicated(keep=False).mean()) if len(shapes) else np.nan
     gset = set(shapes)
-    srv = case.server_spans(target)
-    srv = srv[(srv.startTime >= lo) & (srv.startTime < hi)]
+    srv_all = case.server_spans(target)
+    srv = srv_all[(srv_all.startTime >= lo) & (srv_all.startTime < hi)]
+    feats = []
     kids = tr.parentSpanID.value_counts()
     tsize = tr.traceID.value_counts()
     tid = dict(zip(tr.spanID, tr.traceID))
@@ -155,6 +188,31 @@ def t1_case(case, target) -> list[dict]:
             cols = list(tr.columns) + ["sender"]
             f = pd.read_csv(io.StringIO("".join(lines)), names=cols, dtype=str,
                             keep_default_na=False)
+            # K22's own span code on the overlay (genuine + copies)
+            ov = pd.concat([tr.astype(str), f[list(tr.columns)]], ignore_index=True)
+            ov_st = pd.to_numeric(ov.startTime)
+            cl_rows = ov.index[ov.spanID.isin(set(res.server_ids))]
+            g_rows = ov.index[:len(tr)][tr.spanID.isin(set(srv.spanID)).to_numpy()]
+            g_rows = pd.Index(np.sort(rng.choice(g_rows, min(len(g_rows), len(cl_rows)),
+                                                 replace=False)))
+            s_all = np.sort(ov_st[ov.index.isin(cl_rows) | ov.index.isin(
+                ov.index[:len(tr)][tr.spanID.isin(set(srv_all.spanID)).to_numpy()])].to_numpy())
+            for y, rows in ((1, cl_rows), (0, g_rows)):
+                ex = k22.span_extra(ov, rows, target)
+                sp = k22.span_supp(ov, rows)
+                x = ov_st.loc[rows].to_numpy()
+                i = np.searchsorted(s_all, x)
+                left = np.where(i > 0, x - s_all[np.maximum(i - 1, 0)], 10**12)
+                right = np.where(i + 1 < len(s_all), s_all[np.minimum(i + 1, len(s_all) - 1)] - x,
+                                 10**12)
+                fr = pd.DataFrame({"burst_100ms": ex.burst_100ms.values,
+                                   "load_1s": sp.load_1s.values,
+                                   "nn_5ms": (np.minimum(left, right) <= 5_000).astype(int)})
+                fr.insert(0, "y", y)
+                for k2, v2 in (("case_id", case.case_id), ("target", target), ("family", family),
+                               ("dose", level)):
+                    fr.insert(0, k2, v2)
+                feats.append(fr)
             fsh = f.groupby("traceID", sort=False).apply(_shape)
             fsz = f.traceID.value_counts()
             fk = f.parentSpanID[f.parentSpanID != ""].value_counts()
@@ -177,13 +235,32 @@ def t1_case(case, target) -> list[dict]:
                 "max_ratio_service": max(res.volume_ratio, key=res.volume_ratio.get),
                 "max_ratio": max(res.volume_ratio.values()),
                 "volume_ratio": json.dumps(res.volume_ratio, sort_keys=True)})
-    return out
+    return out, feats
 
 
 def one(args):
     case, target, what = args
-    return (logs_case(case, target) if what == "logs" else []), \
-           (t1_case(case, target) if what == "t1" else [])
+    return (logs_case(case, target) if what == "logs" else ([], [])), \
+           (t1_case(case, target) if what == "t1" else ([], []))
+
+
+def auc_table(feats: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, bool]:
+    """Single-feature AUC, forged (y=1) vs genuine, pooled per family/dose (the check) and per
+    target service (reported)."""
+    rows, ok = [], True
+    for keys, g in feats.groupby(["family", "dose"]):
+        for scope, sub in [("pooled", g)] + [(t, h) for t, h in g.groupby("target")]:
+            r = {"family": keys[0], "dose": keys[1], "scope": scope,
+                 "n_forged": int(sub.y.sum()), "n_genuine": int((sub.y == 0).sum())}
+            for c in cols:
+                v = sub[c].astype(float)
+                r[c] = (round(float(roc_auc_score(sub.y, v)), 3)
+                        if sub.y.nunique() == 2 and v.nunique() > 1 else 0.5)
+            if scope == "pooled":
+                r["pass"] = all(abs(r[c] - 0.5) <= AUC_TOL for c in cols)
+                ok &= r["pass"]
+            rows.append(r)
+    return pd.DataFrame(rows), ok
 
 
 def main(argv=None) -> int:
@@ -204,8 +281,16 @@ def main(argv=None) -> int:
     a.out.mkdir(parents=True, exist_ok=True)
     with ProcessPoolExecutor(a.workers) as pool:
         res = list(pool.map(one, jobs))
-    logs = pd.DataFrame([r for l, _ in res for r in l])
-    t1 = pd.DataFrame([r for _, t in res for r in t])
+    logs = pd.DataFrame([r for (l, _), _ in res for r in l])
+    t1 = pd.DataFrame([r for _, (t, _) in res for r in t])
+    lf = [f for (_, fs), _ in res for f in fs]
+    tf = [f for _, (_, fs) in res for f in fs]
+    for name, fs, cols in (("logs", lf, LOG_AUC), ("t1", tf, SPAN_AUC)):
+        if fs:
+            tab, ok = auc_table(pd.concat(fs, ignore_index=True), cols)
+            tab.to_csv(a.out / f"preflight_{name}_auc.csv", index=False)
+            print(tab.to_string(index=False))
+            print(f"{name.upper()} AUC CHECK (|AUC-0.5| <= {AUC_TOL} pooled):", "PASS" if ok else "FAIL")
     if len(logs):
         logs.to_csv(a.out / "preflight_logs.csv", index=False)
         agg, ok = summarise_logs(logs)

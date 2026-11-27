@@ -1,5 +1,6 @@
-"""The K22 revision (27 Nov): T1 as replayed requests, and log insertions that replay the shape of a
-genuine burst (F1/F4) or a sibling case's episode (A1). Unit tests run anywhere; the real-data
+"""The K22 revision (27 Nov): T1 as replayed requests placed at genuine request times, and log
+insertions that replay a sibling case's episodes (A1 whole; F1/F4 as runs whose episodes end in
+the forged line). Unit tests run anywhere; the real-data
 tests need the rebuilt development cases and skip without them."""
 from __future__ import annotations
 
@@ -62,7 +63,10 @@ def test_log_inserts_keep_count_window_and_never_sit_next_to_their_copy(case_and
     v = fb.variant_name(family, "T2", "high", SEED)
     rows = fb._log_inserts(case, logs, target, family, dose,
                            np.random.default_rng(seed_for(case.case_id, v, target)))
-    assert len(rows) == dose.f1_lines
+    forged = [r for r in rows if not r.get("_witness")]
+    assert len(forged) == dose.f1_lines                     # the dose counts forged lines only
+    if family == "A1":
+        assert len(rows) == dose.f1_lines
     lo, hi = ((case.inject_time - 300, case.inject_time - 120) if family == "F4"
               else (case.inject_time, case.window[1]))
     mine = logs[logs.container_name == log_name(target)]
@@ -74,11 +78,19 @@ def test_log_inserts_keep_count_window_and_never_sit_next_to_their_copy(case_and
         assert r["container_name"] == log_name(target)
         close = np.abs(gts - r["timestamp"]) <= 1_000_000
         assert not (close & (gmsg == r["message"])).any(), "a copy next to its original (K22 v1)"
+    donor = set(fb.a1_donor_lines(case, log_name(target), pre=family == "F4").message.astype(str))
     if family == "A1":                       # content from the sibling repetition, not this file
         own = set(gmsg)
-        donor = set(fb.a1_donor_lines(case, log_name(target)).message.astype(str))
         assert {r["message"] for r in rows} <= donor
         assert any(r["message"] not in own for r in rows)
+    else:                                    # round 2: companions are donor lines; every forged
+        comp = [r for r in rows if r.get("_witness")]   # line ends its episode
+        assert {r["message"] for r in comp} <= donor
+        assert all(r["level"].lower() in ("error", "warning") for r in forged)
+        ts = sorted(r["timestamp"] for r in rows)
+        for r in comp:                       # a companion is followed within 10 ms by its episode
+            nxt = [t for t in ts if t > r["timestamp"]]
+            assert nxt and nxt[0] - r["timestamp"] <= fb.EPISODE_GAP_NS
 
 
 @real
@@ -121,3 +133,11 @@ def test_t1_replays_whole_traces_well_nested_and_in_window(case_and_target, fami
     assert ok and np.mean(ok) >= 0.99, (family, np.mean(ok))
     if family == "F2":
         assert (by.loc[res.server_ids, "statusCode"] == f"{float(dose.f2_code)}").all()
+    # round 2: density-matched placement: each copy's first claim starts within 2 s of a genuine
+    # target server start
+    g = np.sort(case.server_spans(target).startTime.astype("int64").to_numpy())
+    firsts = f[f.spanID.isin(set(res.server_ids))].groupby("traceID").startTime.apply(
+        lambda x: x.astype("int64").min()).to_numpy()
+    i = np.clip(np.searchsorted(g, firsts), 1, len(g) - 1)
+    near = np.minimum(np.abs(g[i] - firsts), np.abs(g[i - 1] - firsts))
+    assert (near <= adaptive.T1_JITTER_US).all()

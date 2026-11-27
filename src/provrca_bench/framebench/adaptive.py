@@ -21,7 +21,11 @@ spans pushed by the same delta). Every replayed span is sent from ``attacker-pod
 callers and the rest of the copy are witnesses. F2 adds ``k = n*s/(1-s)`` claims, doubling the
 target's volume at high dose (a named limitation next to A1), and the replay raises the volume of
 every service on the copied traces too. F3 adds traces until the target's post-fault p95 reaches
-the T2 F3 goal, starting from traces that hold a span at or above the genuine p95. The first
+the T2 F3 goal, starting from traces that hold a span at or above the genuine p95, weighted by
+1/(1 - 0.95^k) for a trace with k target server spans (round 2). A copy's first claim is placed
+at a genuine trace's first target server start within +-60 s of the base, plus a genuine <= 5 ms neighbour gap
+(with the case's share of such neighbours) or U(+-2 s) (round 2: density-matched, so a copy sees
+the load a genuine request sees; round 1's uniform +-60 s put copies in quieter moments). The first
 builder (forged pairs with no children, in 2-3-span or +2 traces) was separable by structure alone
 (K22 sweep, 27 Nov).
 
@@ -159,6 +163,8 @@ class T1Result:
 
 T1_DILATION = (0.95, 1.05)       # per replay: no copy is an exact twin of a genuine trace
 T1_PLACE_US = 60_000_000         # a copy lands within +-60 s of its base's own time
+T1_NEAR_US = 5_000                 # round 2: "a neighbour within 5 ms"
+T1_JITTER_US = 2_000_000           # round 2: otherwise U(+-2 s) about the drawn genuine start
 # A root-cause volume cap (senior review change 2) is supported but OFF: at 20% it cut T1-F2-high to
 # a third of its claims on recommendation cases (every such trace also calls the root cause), so the
 # dose would no longer be the T2 dose. The ratio is recorded per variant instead (meta
@@ -237,6 +243,19 @@ def t1_inserts(case: CleanCase, target: str, family: str, dose, rng: np.random.G
     # traces that avoid the root cause first, so the replay does not boost the true signal
     order = [t for t in perm if rc_in[t] == 0] + [t for t in perm if rc_in[t] > 0]
     genuine = post.duration.to_numpy(dtype=float)
+    # density-matched placement (round 2, review change 4): a copy's first claim starts at a
+    # genuine target server start t_g within +-60 s of the base, plus, with probability pi (the
+    # case's share of genuine target server spans with a neighbour within 5 ms), a genuine
+    # nearest-neighbour gap of <= 5 ms, otherwise U(+-2 s)
+    # anchors are the genuine traces' first target server starts, not every span's: a copy is a
+    # trace, and drawing per span over-weights moments dense with multi-call traces (pre-flight,
+    # round 2: currency burst_100ms AUC 0.57-0.64)
+    g_st = np.sort(post.groupby(post.spanID.map(tid_of)).startTime.min().to_numpy(dtype=np.int64))
+    _d = np.diff(g_st)
+    nn = np.minimum(np.r_[np.inf, _d], np.r_[_d, np.inf])
+    nn = nn[np.isfinite(nn)].astype(np.int64)
+    close = nn[nn <= T1_NEAR_US]
+    pi = float((nn <= T1_NEAR_US).mean()) if len(nn) else 0.0
     if family == "F2":
         s = dose.f2_share
         k = int(round(n * s / (1 - s)))
@@ -246,7 +265,17 @@ def t1_inserts(case: CleanCase, target: str, family: str, dose, rng: np.random.G
             return res
         goal = _p95(genuine) * dose.f3_factor
         top = set(post.spanID[genuine >= _p95(genuine)])
-        order = [t for t in order if top & set(in_window[t])] or order
+        pool = [t for t in order if top & set(in_window[t])]
+        if pool:
+            # round 2 (review, optional 1): a copy brings all k of its target server spans, so
+            # an unweighted pool over-represents many-call traces; weight 1/(1 - 0.95^k), drawn
+            # without replacement (Efraimidis-Spirakis), root-cause-free traces still first
+            def weighted(ts):
+                w = np.array([1.0 / (1.0 - 0.95 ** len(in_window[t])) for t in ts])
+                key = rng.random(len(ts)) ** (1.0 / w)
+                return [ts[i] for i in np.argsort(-key, kind="stable")]
+            order = (weighted([t for t in pool if rc_in[t] == 0])
+                     + weighted([t for t in pool if rc_in[t] > 0]))
         k = 3 * n                                      # a cap; the p95 goal stops it first
     res.requested = k if family == "F2" else 0
     added = pd.Series(dtype=float)
@@ -268,6 +297,7 @@ def t1_inserts(case: CleanCase, target: str, family: str, dose, rng: np.random.G
         du = np.array([int(r[H["duration"]]) for r in recs], dtype=np.int64)
         pos = {x: i for i, x in enumerate(sid)}
         claims = sorted((pos[c] for c in in_window[t]), key=lambda i: st[i])
+        base_t = int(st[claims[0]])
         client_of = {c: pos.get(str(pairs.at[sid[c], "client"])) for c in claims}
         if family == "F3":
             def chain(i):                               # ancestors inside the trace
@@ -294,8 +324,15 @@ def t1_inserts(case: CleanCase, target: str, family: str, dose, rng: np.random.G
         st = r0 + np.round((st - r0) * f).astype(np.int64)
         du = (r0 + np.round((en - r0) * f).astype(np.int64)) - st
         shift = None
-        for _ in range(20):
-            d = int(rng.integers(-T1_PLACE_US, T1_PLACE_US + 1))
+        first = int(st[claims[0]])
+        a, b = np.searchsorted(g_st, [base_t - T1_PLACE_US, base_t + T1_PLACE_US])
+        for _ in range(20 if b > a else 0):
+            t_g = int(g_st[int(rng.integers(a, b))])
+            if len(close) and rng.random() < pi:
+                delta = int(close[int(rng.integers(len(close)))]) * (1 if rng.random() < 0.5 else -1)
+            else:
+                delta = int(rng.integers(-T1_JITTER_US, T1_JITTER_US + 1))
+            d = t_g + delta - first
             if st.min() + d >= lo and st.max() + d < hi:
                 shift = d
                 break
