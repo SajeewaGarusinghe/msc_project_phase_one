@@ -18,6 +18,7 @@ import csv
 import importlib.util
 import json
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -41,6 +42,7 @@ WORKERS = int(os.environ.get("PROVRCA_WORKERS", "6"))
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod          # so worker processes can pickle its functions by name
     spec.loader.exec_module(mod)
     return mod
 
