@@ -72,8 +72,19 @@ def test_a_label_record_validates():
 
 
 def test_an_injected_record_is_always_fabricated():
-    with pytest.raises(ValidationError, match="fabricated is always true"):
+    with pytest.raises(ValidationError, match="if and only if"):
         label(fabricated=False)
+
+
+@pytest.mark.parametrize("family,escape", [("AF1", "no_time_rule"), ("AF2", "identity_claim")])
+def test_an_honest_fault_is_never_fabricated(family, escape):
+    """Two-way: AF1/AF2 records are genuine records with a false time or writer, made by no
+    attacker (step 5 review, item 8)."""
+    lab = label(family=family, fabricated=False, rule_applicable=False,
+                rule_applicable_clean=False, escape=escape)
+    assert not lab.fabricated
+    with pytest.raises(ValidationError, match="if and only if"):
+        label(family=family, fabricated=True, rule_applicable=False, escape=escape)
 
 
 def test_the_three_labels_are_independent():

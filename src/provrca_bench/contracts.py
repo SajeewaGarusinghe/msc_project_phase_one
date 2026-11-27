@@ -115,10 +115,13 @@ class LabelRecord(_Strict):
     target: ServiceName
     family: Literal["F1", "F2", "F3", "F4", "FS", "F2c", "F3c", "FSc", "F2cD", "A1", "AF1", "AF2"]
     threat_model: Literal["T1", "T2"]
-    dose: str = Field(min_length=1, description="high or low, fixed from the P0 pilot")
+    dose: str = Field(min_length=1, description="high or low, fixed from the P0 pilot; for AF1 "
+                      "it carries the clock offset's sign, plus or minus (a sign, not a dose)")
     seed: int
     record_id: str = Field(min_length=1, description="the spanID or log row this label is about")
-    fabricated: bool = Field(description="always true for an injected record")
+    fabricated: bool = Field(description="true for every attacker-made record; false if and only "
+                             "if the family is an honest fault (AF1, AF2): a genuine record "
+                             "carrying a false time or a false writer, made by no attacker")
     factually_false: bool = Field(
         description="its claim disagrees with the original data for the same request or window")
     rule_applicable: bool | None = Field(
@@ -132,18 +135,23 @@ class LabelRecord(_Strict):
                     "(provrca.chain.applicability_in_clean); for a T1 forged pair, on the "
                     "constructed pair judged with attribution off")
     escape: Literal["none", "R1_cap", "rule_not_applicable", "witness", "no_log_rule",
-                    "witness_unlinked", "code_range"] | None = Field(
+                    "witness_unlinked", "code_range", "no_time_rule",
+                    "identity_claim"] | None = Field(
         default=None, description="how the forgery stays out of a rule's reach, if it does: "
                     "R1_cap (F3c: under the caller's wait), rule_not_applicable (no rule for the "
                     "clean pair), witness_unlinked (F2c/FSc: parentSpanID replaced by an id not in "
-                    "the file), code_range (F2cD, dev-only: a status outside gRPC's 0-16)")
+                    "the file), code_range (F2cD, dev-only: a status outside gRPC's 0-16), "
+                    "no_time_rule (AF1: only the time is false, and no rule reads time), "
+                    "identity_claim (AF2: only the writer is false; attribution's check)")
 
     _check_service = field_validator("target")(_no_underscore)
 
     @model_validator(mode="after")
-    def _injected_records_are_fabricated(self) -> "LabelRecord":
-        if not self.fabricated:
-            raise ValueError("a label record describes an injected record, so fabricated is always true")
+    def _fabricated_unless_honest_fault(self) -> "LabelRecord":
+        honest = self.family in ("AF1", "AF2")
+        if self.fabricated == honest:
+            raise ValueError("fabricated is false if and only if the family is AF1 or AF2 "
+                             f"(family {self.family}, fabricated {self.fabricated})")
         return self
 
 

@@ -19,7 +19,8 @@ sealed directory only (A4), as ``<case>/<variant>.labels.jsonl`` and ``<case>/<v
 Threat models: **T2** (the genuine emitter: the target is the sender of its own false records,
 edited in place) for every family, and **T1** (a spoofer that *adds* forged pairs from
 ``attacker-pod``) for F2 and F3; the rule-aware constructions are in ``adaptive.py``. F2c and FSc
-(escape routes chosen by distinguishability, step 4b) and AF1/AF2 come later.
+(escape routes chosen by distinguishability, step 4b); AF1/AF2, the honest faults, are in
+``honest.py`` (step 5).
 
 Labels carry ``rule_applicable`` (as delivered, derived from what the generator did),
 ``rule_applicable_clean`` (the clean pair, from the P3 chain on the clean case) and ``escape``.
@@ -40,12 +41,14 @@ import numpy as np
 import pandas as pd
 
 from provrca_bench.contracts import LabelRecord
-from provrca_bench.framebench import adaptive
+from provrca_bench.framebench import adaptive, honest
 from provrca_bench.framebench.case import CleanCase, log_name
 from provrca_bench.framebench.doses import CaseDose, dose_for
 from provrca_bench.framebench.target import CandidateCheck, seed_for
 
-FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1", "F3c", "F2c", "FSc", "F2cD")
+FAMILIES = ("clean", "F1", "F2", "F3", "FS", "F4", "A1", "F3c", "F2c", "FSc", "F2cD", "AF1", "AF2")
+#: the honest faults (step 5): not attacks, so no rule is targeted and they have their own levels
+HONEST = {"AF1": tuple(honest.AF1_LEVELS), "AF2": (honest.AF2_LEVEL,)}
 SPAN_FAMILIES = {"F2", "F3", "FS", "F3c", "F2c", "FSc", "F2cD"}
 T1_FAMILIES = {"F2", "F3"}
 #: the rule each span family's forgery targets (label ``rule_applicable``)
@@ -196,11 +199,15 @@ def _write_traces(src: Path, dst: Path, edits: dict[str, dict],
         i_sid, i_svc = cols.index("spanID"), cols.index("serviceName")
         i_dur, i_code = cols.index("duration"), cols.index("statusCode")
         i_par = cols.index("parentSpanID")
+        i_st, i_stm, i_time = cols.index("startTime"), cols.index("startTimeMillis"), cols.index("time")
         fout.write(header + ",sender\n")
         for row_no, line in enumerate(fin):
             raw = line.rstrip("\r\n")
             f = next(csv.reader([raw]))
             e = edits.get(f[i_sid])
+            if e and e.get("_svc", f[i_svc]) != f[i_svc]:
+                e = None                      # a duplicated id written by another service: not ours
+            sender = f[i_svc]                 # the collector's identity: the writer, before any edit
             if e:
                 if "duration" in e:
                     f[i_dur] = str(e["duration"])
@@ -208,19 +215,29 @@ def _write_traces(src: Path, dst: Path, edits: dict[str, dict],
                     f[i_code] = e["statusCode"]
                 if "parentSpanID" in e:
                     f[i_par] = e["parentSpanID"]
+                for k, i in (("startTime", i_st), ("startTimeMillis", i_stm), ("time", i_time),
+                             ("serviceName", i_svc)):
+                    if k in e:
+                        f[i] = e[k]
                 buf = io.StringIO()
                 csv.writer(buf, lineterminator="").writerow(f)
                 raw = buf.getvalue()
                 done += 1
-            fout.write(f"{raw},{f[i_svc]}\n")
+            fout.write(f"{raw},{sender}\n")
             for extra in inserts.get(row_no, ()):
                 fout.write(extra)
     return done
 
 
-def _write_logs(logs: pd.DataFrame, dst: Path, inserts: list[dict]) -> None:
+def _write_logs(logs: pd.DataFrame, dst: Path, inserts: list[dict],
+                edits: dict[int, dict] | None = None) -> None:
+    """``edits`` (AF1) change fields of rows in place, by position; rows are never re-sorted for
+    them, so a row keeps its position and can be compared with the clean case's."""
     out = logs.copy()
     out["sender"] = out.container_name
+    for i, e in (edits or {}).items():
+        for k, v in e.items():
+            out.iat[i, out.columns.get_loc(k)] = v
     if inserts:
         new = pd.DataFrame(inserts)
         new["sender"] = new.container_name
@@ -275,6 +292,8 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
         raise ValueError(f"threat {threat} is not built for {family} (T1: {sorted(T1_FAMILIES)})")
     if family != "clean" and not target:
         raise ValueError("an overlay needs a target")
+    if family in HONEST and (threat != "T2" or dose_level not in HONEST[family]):
+        raise ValueError(f"{family} is built as T2 with level {HONEST[family]}")
     variant = variant_name(family, threat, dose_level, seed)
     out = Path(out_root) / case.case_id / variant
     if out.exists():
@@ -287,7 +306,7 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
     for name in COPY:
         shutil.copy2(case.case_dir / name, out / name)
 
-    dose = dose_for(case, target, dose_level) if family != "clean" else None
+    dose = dose_for(case, target, dose_level) if family not in ("clean", *HONEST) else None
     rng = np.random.default_rng(seed_for(case.case_id, variant, target))
     res = BuildResult(case.case_id, variant, target, family, dose, out)
 
@@ -295,7 +314,21 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
     edits: dict[str, dict] = {}
     escape: dict[str, str] = {}
     t1 = None
-    if threat == "T1":
+    af1 = af2 = None
+    logs = pd.read_csv(case.case_dir / "logs.csv", low_memory=False, keep_default_na=False)
+    if family == "AF1":
+        af1 = honest.af1_edits(case, target, dose_level, logs)
+        edits = {sid: {**e, "_svc": target} for sid, e in af1.span_edits.items()}
+        res.extra.update(af1_delta_us=af1.delta_us, af1_spans=len(af1.span_edits),
+                         af1_log_lines=len(af1.log_edits), af1_co_located=af1.co_located)
+    elif family == "AF2":
+        af2 = honest.af2_edits(case, target, rng)
+        edits = {sid: {**e, "_svc": af2.b} for sid, e in af2.span_edits.items()}
+        res.extra.update(af2_b=af2.b, af2_capped_by_b=af2.capped_by_b, af2_candidates=af2.candidates,
+                         af2_excluded=af2.excluded, af2_requested=af2.requested,
+                         af2_requests=af2.requests, af2_spans=len(af2.span_edits),
+                         af2_requests_pre_post=list(af2.pre_post))
+    elif threat == "T1":
         t1 = adaptive.t1_inserts(case, target, family, dose, rng)
         res.extra.update(t1_requested=t1.requested, t1_written=len(t1.server_ids),
                          t1_forged_parents=len(t1.parent_ids), t1_skipped_no_fit=t1.skipped_no_fit)
@@ -307,16 +340,15 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
         edits = _span_edits(case, target, family, dose, rng)
         if family in ESCAPE_OF:
             escape = {sid: ESCAPE_OF[family] for sid in edits}
-    if edits:
+    if edits and not (af1 or af2):
         spans_before = case.spans.set_index("spanID").loc[list(edits)]
     res.edited = _write_traces(case.case_dir / "traces.csv", out / "traces.csv", edits,
                                t1.lines if t1 else None)
 
-    logs = pd.read_csv(case.case_dir / "logs.csv", low_memory=False, keep_default_na=False)
     inserts = (_log_inserts(case, logs, target, family, dose, rng)
                if family in LOG_FAMILIES else [])
     res.injected = len(inserts)
-    _write_logs(logs, out / "logs.csv", inserts)
+    _write_logs(logs, out / "logs.csv", inserts, af1.log_edits if af1 else None)
 
     _derive(out, python or harness_python())
 
@@ -324,7 +356,11 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
     base = dict(case_id=case.case_id, variant=variant, target=target or "none",
                 family=family if family != "clean" else "A1", threat_model=threat,
                 dose=dose_level, seed=seed, fabricated=True)
-    if family != "clean":
+    if family in HONEST:
+        res.labels = _honest_labels(case, base, af1, af2)
+        kinds = [lab["record_id"].split(":")[0] for lab in res.labels]
+        res.extra["labels_by_kind"] = {k: kinds.count(k) for k in sorted(set(kinds))}
+    elif family != "clean":
         pairs = adaptive.clean_pairs(str(case.case_dir)) if (edits or t1) else None
         for sid, e in edits.items():
             orig = spans_before.loc[sid]
@@ -355,6 +391,37 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
         res.extra.update(_achieved(case, out, target))
     _seal(res, Path(sealed_root), checks)
     return res
+
+
+def _honest_labels(case: CleanCase, base: dict, af1, af2) -> list[dict]:
+    """AF1/AF2 labels (step 5 review, item 8). These are genuine records made by no attacker, so
+    ``fabricated`` is False (the contract allows that for AF1/AF2 only). Each record is factually
+    false in one field: AF1 its time, AF2 its writer. No rule reads either field, so
+    ``rule_applicable`` is False and ``escape`` names why: ``no_time_rule`` (AF1) or
+    ``identity_claim`` (AF2, which only attribution can check). ``rule_applicable_clean`` says
+    whether R1 or R2 applied to the record's clean pair (server spans; False for other spans and
+    for logs). The scorer must keep AF records out of every F-family metric and out of the
+    fabricated denominators; they are reported per family (review item 8).
+
+    AF1 log ids are ``log:<row>``, the same key ``provrca.chain.judge_logs`` gives, because AF1
+    never re-sorts the log file (review item 2)."""
+    pairs = adaptive.clean_pairs(str(case.case_dir))
+    applies = (pairs.r1 | pairs.r2)
+    applies = applies[~applies.index.duplicated(keep=False)].to_dict()
+    base = {**base, "fabricated": False}
+    esc = "no_time_rule" if af1 else "identity_claim"
+    out = []
+    for sid in (af1.span_edits if af1 else af2.span_edits):
+        out.append(LabelRecord(**base, record_id=f"span:{sid}", factually_false=True,
+                               rule_applicable=False,
+                               rule_applicable_clean=bool(applies.get(sid, False)),
+                               escape=esc).model_dump())
+    if af1:
+        for i in af1.log_edits:
+            out.append(LabelRecord(**base, record_id=f"log:{i}", factually_false=True,
+                                   rule_applicable=False, rule_applicable_clean=False,
+                                   escape=esc).model_dump())
+    return out
 
 
 def _seal(res: BuildResult, sealed_root: Path, checks: list[CandidateCheck] | None) -> None:
