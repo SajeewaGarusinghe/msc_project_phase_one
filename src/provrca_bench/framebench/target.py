@@ -118,3 +118,106 @@ def draw_target(case: CleanCase, seed: int) -> tuple[str | None, list[CandidateC
 
 def checks_as_rows(case: CleanCase, checks: list[CandidateCheck], drawn: str | None) -> list[dict]:
     return [{"case_id": case.case_id, **asdict(c), "drawn": c.service == drawn} for c in checks]
+
+
+# --------------------------------------------------------------------------------------------
+# The distant-target subset (proposal section 12: "A distant-target subset (10%) is reported as a
+# sensitivity check"). Step reviewed first (RESCOPE, 27 Nov): distance is measured on the full call
+# graph (``CleanCase.call_edges``), checks (a)-(d) are exactly the main rule's, so the subset differs
+# from the main targets in distance only, and ancestors of the root cause are excluded ((c)'s logic,
+# extended: every ancestor inherits symptoms). A service absent from the graph is ``unknown`` and
+# never eligible. The selection rule is frozen; eligible counts on test strata wait for G3.
+# --------------------------------------------------------------------------------------------
+
+DISTANT_MIN_HOPS = 3
+DISTANT_SHARE = 0.10
+
+
+def distance_classes(case: CleanCase) -> dict[str, tuple[str, int | None]]:
+    """Each candidate -> (class, undirected hops from the root cause in the full call graph).
+    Classes: root, neighbour (callee or sibling: the main rule's shapes), ancestor (any directed
+    ancestor), near_other (2 hops, none of those), distant (>= DISTANT_MIN_HOPS), unknown (not in
+    the graph, or not connected to the root cause)."""
+    edges, _ = case.call_edges
+    root = case.root_cause
+    adj: dict[str, set[str]] = {}
+    parents: dict[str, set[str]] = {}
+    for a, b in edges:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+        parents.setdefault(b, set()).add(a)
+    hops = {root: 0}
+    frontier = [root]
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for v in adj.get(u, ()):
+                if v not in hops:
+                    hops[v] = hops[u] + 1
+                    nxt.append(v)
+        frontier = nxt
+    anc, stack = set(), list(parents.get(root, ()))
+    while stack:
+        u = stack.pop()
+        if u not in anc:
+            anc.add(u)
+            stack.extend(parents.get(u, ()))
+    callees = {b for a, b in edges if a == root}
+    callers = {a for a, b in edges if b == root}
+    sibs = {b for a, b in edges if a in callers} - {root}
+    out = {}
+    for svc in case.candidates:
+        h = hops.get(svc)
+        if svc == root:
+            cls = "root"
+        elif h is None:
+            cls = "unknown"
+        elif svc in anc:
+            cls = "ancestor"
+        elif svc in callees or svc in sibs:
+            cls = "neighbour"
+        elif h >= DISTANT_MIN_HOPS:
+            cls = "distant"
+        else:
+            cls = "near_other"
+        out[svc] = (cls, h)
+    return out
+
+
+def distant_candidates(case: CleanCase) -> list[dict]:
+    """Every candidate's distance class with the main rule's checks (a), (b), (d) and the ancestor
+    exclusion; ``eligible`` = distant and passing all of them."""
+    checks = {c.service: c for c in check_candidates(case)}
+    rows = []
+    for svc, (cls, h) in sorted(distance_classes(case).items()):
+        c = checks[svc]
+        ok = (cls == "distant" and c.a_no_alarm and c.b_no_error_rise and c.c_not_upstream_caller
+              and c.d_has_spans_and_logs)
+        rows.append({"case_id": case.case_id, "service": svc, "class": cls, "hops": h,
+                     "a_no_alarm": c.a_no_alarm, "b_no_error_rise": c.b_no_error_rise,
+                     "c_not_upstream_caller": c.c_not_upstream_caller,
+                     "d_has_spans_and_logs": c.d_has_spans_and_logs, "eligible": ok})
+    return rows
+
+
+def draw_distant_target(case: CleanCase, seed: int) -> tuple[str | None, list[dict]]:
+    """One seeded draw among the eligible distant candidates; None if there is none."""
+    rows = distant_candidates(case)
+    pool = sorted(r["service"] for r in rows if r["eligible"])
+    if not pool:
+        return None, rows
+    rng = np.random.default_rng(seed_for("distant-target", case.case_id, seed))
+    return pool[int(rng.integers(len(pool)))], rows
+
+
+def distant_subset(eligible_case_ids: list[str], seed: int, share: float = DISTANT_SHARE) -> list[str]:
+    """The cases of one stratum that get a distant-target variant: a seeded ``share`` of the cases
+    with at least one eligible distant candidate, rounded up. Call once per stratum. Each selected
+    case is run beside its own neighbour target (paired design), so the reported quantity is the
+    within-case difference in target blame rate, per stratum, descriptively."""
+    ids = sorted(eligible_case_ids)
+    if not ids:
+        return []
+    k = int(np.ceil(share * len(ids)))
+    rng = np.random.default_rng(seed_for("distant-subset", seed, len(ids)))
+    return sorted(ids[i] for i in rng.choice(len(ids), size=k, replace=False))
