@@ -28,12 +28,14 @@ from provrca_bench.framebench.target import checks_as_rows, draw_target
 
 def jobs_for(families: set[str] | None = None) -> list[tuple[str, str, str]]:
     """(family, threat, level) for every variant built per case; the honest faults use their own
-    levels (AF1: the sign of the clock offset; AF2: one level), not the attack doses."""
+    levels (AF1: the sign of the clock offset; AF2: one level), not the attack doses. ``families``
+    holds family names (every threat) or ``family:threat`` tokens (``F2:T1``)."""
     jobs = ([("clean", "T2", "high")]
             + [(f, "T2", d) for f in FAMILIES if f != "clean"
                for d in (HONEST[f] if f in HONEST else DOSES)]
             + [(f, "T1", d) for f in sorted(T1_FAMILIES) for d in DOSES])
-    return [j for j in jobs if families is None or j[0] in families]
+    return [j for j in jobs
+            if families is None or j[0] in families or f"{j[0]}:{j[1]}" in families]
 
 
 def _one_case(case: CleanCase, seed: int, out: Path, sealed: Path,
@@ -54,6 +56,8 @@ def _one_case(case: CleanCase, seed: int, out: Path, sealed: Path,
                      "achieved_p95_ratio": r.extra.get("achieved_p95_ratio", ""),
                      "achieved_post_nonok_share": r.extra.get("achieved_post_nonok_share", ""),
                      "t1_written": r.extra.get("t1_written", ""),
+                     "t1_rc_volume_ratio": (r.extra.get("t1_volume_ratio") or {}).get(case.root_cause, "")
+                     if threat == "T1" else "",
                      "af2_b": r.extra.get("af2_b") or "",
                      "seconds": round(time.time() - t0, 1)})
     return checks_as_rows(case, checks, target), rows
@@ -69,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=20261125)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--cases", nargs="*", help="restrict to these case ids")
-    p.add_argument("--families", nargs="*", help="build only these families; the existing "
+    p.add_argument("--families", nargs="*", help="build only these families (or family:threat "
+                   "tokens, e.g. F2:T1); the existing "
                    "index.csv is merged (rows of rebuilt variants replaced) and targets.csv is left "
                    "as it is, since the target draw does not depend on the family")
     a = p.parse_args(argv)

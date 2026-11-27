@@ -7,8 +7,9 @@ What is written
   * ``traces.csv``: every genuine line byte for byte, plus a ``sender`` column; edited spans
     (F2, F3, FS) differ only in ``duration`` and/or ``statusCode``, written in the file's own format
     (``13.0``, like the genuine non-OK spans).
-  * ``logs.csv``: every genuine row plus a ``sender`` column; injected lines (F1, F4, A1) are inserted
-    in timestamp order, in the target's own level casing.
+  * ``logs.csv``: every genuine row plus a ``sender`` column; injected lines (F1, F4, A1) replay the
+    shape of a genuine burst of the target at another genuine line's time, inserted in timestamp
+    order, in the target's own level casing.
   * derived files rebuilt by ``rcaeval-convert derive``, the same call as for clean cases (A3).
     Span families change only ``tracets_*``; ``simple_metrics.csv`` and ``metrics.csv`` are platform-
     written (cAdvisor, Envoy) and are never touched (K23). Untouched files are hard-linked.
@@ -17,8 +18,8 @@ What is never written into the case: the family, dose, seed, target or any label
 sealed directory only (A4), as ``<case>/<variant>.labels.jsonl`` and ``<case>/<variant>.meta.json``.
 
 Threat models: **T2** (the genuine emitter: the target is the sender of its own false records,
-edited in place) for every family, and **T1** (a spoofer that *adds* forged pairs from
-``attacker-pod``) for F2 and F3; the rule-aware constructions are in ``adaptive.py``. F2c and FSc
+edited in place) for every family, and **T1** (a spoofer that *adds* replayed requests from
+``attacker-pod``, with the target's server spans as the claims) for F2 and F3; the rule-aware constructions are in ``adaptive.py``. F2c and FSc
 (escape routes chosen by distinguishability, step 4b); AF1/AF2, the honest faults, are in
 ``honest.py`` (step 5).
 
@@ -154,32 +155,164 @@ def _level_case(levels: pd.Series) -> str:
     return "upper" if len(vals) and (vals.str.isupper().mean() > 0.5) else "lower"
 
 
+BURST_GAP_NS = 1_000_000_000      # a burst: one message, consecutive gaps <= 1 s (K22's dup flag)
+EPISODE_GAP_NS = 10_000_000       # an episode: a container's lines with consecutive gaps <= 10 ms
+MAX_PLACE_TRIES = 50
+
+
+def _hhmm(ts_ns: int) -> str:
+    """The ``time`` column: UTC HH:MM of the timestamp, as RCAEval writes it."""
+    return pd.Timestamp(int(ts_ns), unit="ns", tz="UTC").strftime("%H:%M")
+
+
+def _runs(ts: np.ndarray, key: np.ndarray | None, gap: int) -> list[np.ndarray]:
+    """Positions grouped into maximal runs (of one ``key``, if given) whose consecutive times are at
+    most ``gap`` apart, in time order within each run."""
+    order = np.lexsort((ts, key)) if key is not None else np.argsort(ts, kind="stable")
+    if not len(order):
+        return []
+    same = np.diff(ts[order]) <= gap
+    if key is not None:
+        same &= key[order][1:] == key[order][:-1]
+    cuts = np.flatnonzero(~same) + 1
+    return np.split(order, cuts)
+
+
+def _bursts(lines: pd.DataFrame) -> list[np.ndarray]:
+    return _runs(lines.timestamp.astype("int64").to_numpy(), lines.message.astype(str).to_numpy(),
+                 BURST_GAP_NS)
+
+
+def _episodes(lines: pd.DataFrame) -> list[np.ndarray]:
+    return _runs(lines.timestamp.astype("int64").to_numpy(), None, EPISODE_GAP_NS)
+
+
+def a1_donor_lines(case: CleanCase, container: str) -> pd.DataFrame:
+    """A1's content (K22 revision): the container's lines in the same post-fault window of the
+    **next repetition of the same development template** (sibling directory, cyclic), so no A1
+    line copies a line of its own file. A sibling of a development template is a development case
+    by construction (the split is by template)."""
+    reps = sorted(p for p in case.case_dir.parent.iterdir() if p.is_dir() and p != case.case_dir)
+    if not reps:
+        raise RuntimeError(f"{case.case_id}: no other repetition of {case.template} for A1")
+    later = [p for p in reps if p.name > case.case_dir.name]
+    donor = (later or reps)[0]
+    inj = int((donor / "inject_time.txt").read_text().split()[0])
+    span = case.window[1] - case.inject_time
+    lg = pd.read_csv(donor / "logs.csv", low_memory=False, keep_default_na=False)
+    lg = lg[lg.container_name == container]
+    sec = lg.timestamp.astype("int64") // 10**9
+    out = lg[(sec >= inj) & (sec < inj + span)].copy()
+    out["_rel"] = out.timestamp.astype("int64") - inj * 10**9
+    return out.reset_index(drop=True)
+
+
 def _log_inserts(case: CleanCase, logs: pd.DataFrame, target: str, family: str, dose: CaseDose,
                  rng: np.random.Generator) -> list[dict]:
-    """New log rows for F1, F4 and A1, each borrowing a genuine line's time fields as its donor."""
+    """New log rows for F1, F4 and A1 (K22 revision, 27 Nov; senior review changes 3-5).
+
+    *Shape.* F1/F4: each forged event replays the shape of a genuine **burst** (one message, gaps
+    <= 1 s) of the target container, drawn uniformly over bursts, with the forged error text on
+    every line, so a forged error repeats as the container's own lines do. A1: each event is a
+    genuine **episode** (the container's lines with gaps <= 10 ms, e.g. payment's Charge +
+    Transaction pair) taken from ``a1_donor_lines``, replayed whole (message, level, req_path,
+    error) with its own offsets.
+
+    *Placement.* An event starts after the end of a random genuine episode of the container in the
+    window, by a gap drawn from the container's genuine episode-to-next-episode gaps, and only where
+    no genuine line of the container is within 10 ms (so it is an episode of its own). No line sits
+    next to a copy of itself. The dose's line count is kept exactly (the last event is truncated),
+    inside the family's window."""
     mine = logs[logs.container_name == log_name(target)]
     lo_s, hi_s = ((case.inject_time - F4_WINDOW[0], case.inject_time - F4_WINDOW[1])
                   if family == "F4" else (case.inject_time, case.window[1]))
-    donors = mine[(mine.timestamp // 10**9 >= lo_s) & (mine.timestamp // 10**9 < hi_s)]
-    if donors.empty:
+    lo_ns, hi_ns = lo_s * 10**9, hi_s * 10**9
+    sec = mine.timestamp // 10**9
+    own = mine[(sec >= lo_s) & (sec < hi_s)].copy()
+    if own.empty:
         return []
+    own["_ts"] = own.timestamp.astype("int64")
+    own = own.sort_values("_ts", kind="stable").reset_index(drop=True)
+    ots = own._ts.to_numpy()
+    eps = _episodes(own)
+    e_end = np.sort(np.array([int(own.timestamp.iloc[e[-1]]) for e in eps], dtype=np.int64))
+    e_start = np.sort(np.array([int(own.timestamp.iloc[e[0]]) for e in eps], dtype=np.int64))
+    gaps = e_start[1:] - e_end[:-1]
+    gaps = gaps[gaps > EPISODE_GAP_NS]
+    multi = [e for e in eps if len(e) > 1]
+    # pairing: the share of the container's lines with another line within 1 ms (payment ~0.99,
+    # currency ~0.10, email ~0.04) is the chance a forged error is logged right after a request's
+    # own lines, at one of the container's within-episode gaps of <= 1 ms
+    d = np.diff(ots)
+    near = np.minimum(np.r_[np.inf, d], np.r_[d, np.inf])
+    p_attach = float((near <= 1_000_000).mean())
+    intra = np.concatenate([np.diff(ots[e]) for e in multi]) if multi else np.array([], np.int64)
+    intra = intra[intra <= 1_000_000]
+    if family == "A1":
+        src = a1_donor_lines(case, log_name(target))
+        if src.empty:
+            return []
+        shapes = _episodes(src)
+        sts = src.timestamp.astype("int64").to_numpy()
+    else:
+        src = own
+        shapes = _bursts(own)
+        sts = own.timestamp.astype("int64").to_numpy()
     n = dose.f1_lines
-    picks = donors.iloc[np.sort(rng.integers(0, len(donors), size=n))]
     upper = _level_case(mine.level) == "upper"
-    rows = []
-    for j, (_, d) in enumerate(picks.iterrows()):
-        jitter = int(rng.integers(1, 1_000_000))          # < 1 ms, keeps the donor's second
-        if family == "A1":
-            message, level = str(d.message), d.level      # an ordinary line of its own kind
-        else:
+    rows: list[dict] = []
+    placed: dict[str, list[int]] = {}       # forged message -> times already written
+    event = tries = 0
+    while len(rows) < n:
+        tries += 1
+        if tries > 100 * n:
+            raise RuntimeError(f"{case.case_id}: cannot place {family} lines in the window")
+        b = shapes[int(rng.integers(len(shapes)))]
+        offs = sts[b] - sts[b[0]]
+        t0 = None
+        if family != "A1" and len(intra) and rng.random() < p_attach:
+            # a forged error is logged by a request's handler right after that request's own
+            # lines, as the container's multi-line episodes are (e.g. payment's line pairs)
+            e = multi[int(rng.integers(len(multi)))]
+            cand = int(ots[e[-1]]) + int(intra[int(rng.integers(len(intra)))])
+            if lo_ns <= cand and cand + int(offs[-1]) < hi_ns:
+                t0 = cand
+        for _ in range(0 if t0 is not None else MAX_PLACE_TRIES):
+            cand = int(e_end[int(rng.integers(len(e_end)))]) + int(gaps[int(rng.integers(len(gaps)))]) \
+                if len(gaps) else int(rng.integers(lo_ns, hi_ns))
+            near = np.searchsorted(ots, [cand - EPISODE_GAP_NS, cand + EPISODE_GAP_NS])
+            if lo_ns <= cand and cand + int(offs[-1]) < hi_ns and near[0] == near[1]:
+                t0 = cand
+                break
+        if t0 is None:
+            continue
+        msgs = ([str(src.iloc[int(k)].message) for k in b] if family == "A1" else [None])
+        if family != "A1":
             code, desc = GRPC_FAILURES[int(rng.integers(len(GRPC_FAILURES)))]
-            message = (f"{OPERATION.get(target, target)} failed: rpc error: code = {code} "
-                       f"desc = {desc}")
-            level = "warning" if (family == "F4" and j % 2) else "error"
+            msgs = [f"{OPERATION.get(target, target)} failed: rpc error: code = {code} desc = {desc}"]
+        # two events of one message within 1 s would merge into a larger burst than was drawn
+        if any(abs(t - t0) <= BURST_GAP_NS + int(offs[-1]) for m in set(msgs) for t in placed.get(m, ())):
+            continue
+        anchor = own.iloc[max(int(np.searchsorted(ots, t0)) - 1, 0)]     # the line before
+        if family != "A1":
+            message = msgs[0]
+            level = "warning" if (family == "F4" and event % 2) else "error"
             level = level.upper() if upper else level
-        rows.append({"time": d.time, "timestamp": int(d.timestamp) + jitter,
-                     "container_name": d.container_name, "message": message, "level": level,
-                     "req_path": "", "error": "", "cluster_id": "", "log_template": ""})
+        for k, off in zip(b, offs):
+            if len(rows) == n:
+                break
+            ts = t0 + int(off)
+            if family == "A1":         # an ordinary episode of its own kind, from a sibling case
+                line = src.iloc[int(k)]
+                rows.append({"message": str(line.message), "level": line.level,
+                             "req_path": line.req_path, "error": line.error})
+            else:
+                rows.append({"message": message, "level": level,
+                             "req_path": anchor.req_path, "error": anchor.error})
+            rows[-1].update(time=_hhmm(ts), timestamp=ts, container_name=log_name(target),
+                            cluster_id="", log_template="")
+            placed.setdefault(rows[-1]["message"], []).append(ts)
+        event += 1
     return rows
 
 
@@ -331,7 +464,11 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
     elif threat == "T1":
         t1 = adaptive.t1_inserts(case, target, family, dose, rng)
         res.extra.update(t1_requested=t1.requested, t1_written=len(t1.server_ids),
-                         t1_forged_parents=len(t1.parent_ids), t1_skipped_no_fit=t1.skipped_no_fit)
+                         t1_replays=t1.replays, t1_distinct_traces=t1.distinct_traces,
+                         t1_eligible_traces=t1.eligible_traces, t1_witnesses=len(t1.witness_ids),
+                         t1_skipped_no_fit=t1.skipped_no_fit, t1_skipped_rc_cap=t1.skipped_rc_cap,
+                         t1_rc_added=t1.rc_added, t1_rc_window=t1.rc_window,
+                         t1_volume_ratio=t1.volume_ratio)
     elif family == "F3c":
         f3c = adaptive.f3c_edits(case, target, dose.f3_factor, rng)
         edits, escape = f3c.edits, f3c.escape
@@ -379,7 +516,7 @@ def build_variant(case: CleanCase, *, target: str | None, family: str, threat: s
                 res.labels.append(LabelRecord(**base, record_id=f"span:{sid}", factually_false=True,
                                               rule_applicable=ok, rule_applicable_clean=ok,
                                               escape="none").model_dump())
-            for cid in t1.client_ids + t1.parent_ids:
+            for cid in t1.client_ids + t1.witness_ids:
                 res.labels.append(LabelRecord(**base, record_id=f"span:{cid}", factually_false=True,
                                               rule_applicable=None, rule_applicable_clean=None,
                                               escape="witness").model_dump())

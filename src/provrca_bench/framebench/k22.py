@@ -50,12 +50,24 @@ TIMING = ["start_vs_parent_us", "end_vs_parent_us", "burst_100ms"]
 FORGED = {**FORGED_4B, "F3": DURATION, "F3c": DURATION,
           "T1-F2": STATUS, "T1-F3": DURATION, "F1": [], "F4": [], "A1": []}
 LOG_FORGED = ["level", "template", "template_seen", "msg_len"]
-DECLARED = {"F1", "F2", "F2c", "F2cD", "FS", "FSc", "T1-F2"}
-UNDECLARED = {"F3", "F3c", "T1-F3", "F4", "A1"}
+# supplementary set (K22 revision, 27 Nov; senior review change 6), pre-registered before the re-run;
+# dropped from every v1 mode, so v1's numbers are unchanged
+SUPP_SPAN = ["twin_trace", "load_1s"]
+SUPP_LOG = ["near_gap_log10", "dup_window", "episode_size"]
+SUPP = SUPP_SPAN + SUPP_LOG
+SUPP_LOG_FORGED = ["dup_window"]          # F1/F4: a function of the forged text itself
+# K22 v1 (27 Nov, 27113d2): F3, F3c, T1-F3, F4 and A1 undeclared. Re-run (K22 revision): F3, F3c,
+# F4 and T1-F3 declared identifiable at the record level on the owner's instruction, after the v1
+# results (their forged value is the whole signal); set K22_DECLARE_V1=1 to apply v1's sets.
+_V1 = __import__("os").environ.get("K22_DECLARE_V1", "0") == "1"
+DECLARED = ({"F1", "F2", "F2c", "F2cD", "FS", "FSc", "T1-F2"} if _V1 else
+            {"F1", "F2", "F2c", "F2cD", "FS", "FSc", "T1-F2", "F3", "F3c", "F4", "T1-F3"})
+UNDECLARED = {"F3", "F3c", "T1-F3", "F4", "A1"} if _V1 else {"A1"}
 CATEGORICAL = {"service", "method", "operation", "parent_service", "parent_method", "level",
                "template"}
 F4_WINDOW = (300, 120)
 BOOT = int(__import__("os").environ.get("K22_BOOT", "1000"))
+SUPP_ON = __import__("os").environ.get("K22_SUPP", "0") == "1"
 
 
 # ------------------------------------------------------------------ span helpers
@@ -79,6 +91,50 @@ def span_extra(df: pd.DataFrame, rows: pd.Index, target: str) -> pd.DataFrame:
                          "end_vs_parent_us": (xe - p_end).values, "burst_100ms": burst})
 
 
+def span_supp(df: pd.DataFrame, rows: pd.Index) -> pd.DataFrame:
+    """``twin_trace``: the record's trace has the same multiset of (duration, offset from the trace's
+    first start) as another trace in the file; ``load_1s``: spans of any service starting within
+    +-0.5 s."""
+    st = pd.to_numeric(df.startTime, errors="coerce").fillna(0).astype("int64")
+    du = pd.to_numeric(df.duration, errors="coerce").fillna(-1).astype("int64")
+    tid = df.traceID.astype(str)
+    rel = st - st.groupby(tid).transform("min")
+    h = pd.Series(pd.util.hash_pandas_object(pd.DataFrame({"d": du, "r": rel}), index=False)
+                  .to_numpy().astype(np.uint64), index=df.index)
+    th = h.groupby(tid).sum()
+    twin = th.duplicated(keep=False)
+    x = df.loc[rows]
+    allst = np.sort(st.to_numpy())
+    xs = st.loc[rows].to_numpy()
+    load = np.searchsorted(allst, xs + 500_000, side="right") - np.searchsorted(allst, xs - 500_000)
+    return pd.DataFrame({"twin_trace": x.traceID.astype(str).map(twin).astype(int).values,
+                         "load_1s": load})
+
+
+def log_supp(lg: pd.DataFrame, mine: np.ndarray, inwin: np.ndarray, rows: np.ndarray) -> pd.DataFrame:
+    """Within the target container: log10 gap to the nearest other line (any message), whether the
+    exact message appears elsewhere in the window, and the size of the record's episode (lines
+    with consecutive gaps <= 10 ms)."""
+    ts = lg.timestamp.astype("int64").to_numpy()
+    idx = np.flatnonzero(mine)
+    order = idx[np.argsort(ts[idx], kind="stable")]
+    sts = ts[order]
+    pos = np.empty(len(lg), dtype=np.int64)
+    pos[order] = np.arange(len(order))
+    d = np.diff(sts)
+    prev = np.r_[np.inf, d]
+    nxt = np.r_[d, np.inf]
+    near = np.minimum(prev, nxt)
+    ep = np.cumsum(np.r_[True, d > 10_000_000])
+    ep_size = np.bincount(ep)[ep]
+    msg = lg.message.astype(str)
+    cnt = msg[mine & inwin].value_counts()
+    p = pos[rows]
+    return pd.DataFrame({"near_gap_log10": np.log10(np.maximum(near[p], 1)),
+                         "dup_window": (msg.iloc[rows].map(cnt).fillna(0).to_numpy() > 1).astype(int),
+                         "episode_size": ep_size[p]})
+
+
 def server_rows(df: pd.DataFrame, target: str, lo: int, hi: int, exclude: set[str]) -> pd.Index:
     svc_of = dict(zip(df.spanID, df.serviceName))
     p = df.parentSpanID.map(svc_of)
@@ -87,9 +143,12 @@ def server_rows(df: pd.DataFrame, target: str, lo: int, hi: int, exclude: set[st
 
 
 def span_frame(df_pos, pos, df_neg, neg, inject, target, meta) -> pd.DataFrame:
-    X = pd.concat([pd.concat([features(df_pos, pos, inject), span_extra(df_pos, pos, target)], axis=1),
-                   pd.concat([features(df_neg, neg, inject), span_extra(df_neg, neg, target)], axis=1)],
-                  ignore_index=True)
+    def part(df, rows):
+        cols = [features(df, rows, inject), span_extra(df, rows, target)]
+        if SUPP_ON:
+            cols.append(span_supp(df, rows))
+        return pd.concat(cols, axis=1)
+    X = pd.concat([part(df_pos, pos), part(df_neg, neg)], ignore_index=True)
     X["_y"] = [1] * len(pos) + [0] * len(neg)
     for k, v in meta.items():
         X[k] = v
@@ -175,6 +234,10 @@ def one_case(args) -> tuple[list[pd.DataFrame], list[dict]]:
             pos, neg = sample(pos, n), sample(neg, n)
             X = pd.concat([log_features(lg, pos, unl, inject, True),
                            log_features(lg, neg, unl, inject, False)], ignore_index=True)
+            if SUPP_ON:
+                X = pd.concat([X, pd.concat([log_supp(lg, mine, inwin, pos),
+                                             log_supp(lg, mine, inwin, neg)], ignore_index=True)],
+                              axis=1)
             X["_y"] = [1] * n + [0] * n
             for k2, v2 in meta.items():
                 X[k2] = v2
@@ -225,6 +288,26 @@ def one_case(args) -> tuple[list[pd.DataFrame], list[dict]]:
 def modes(fam: str, kind: str) -> dict[str, list[str] | None]:
     """mode -> features to drop (None: the mode does not apply). Extended timing features are
     dropped from every non-timing mode, so ``full`` is exactly step 4b's set for spans."""
+    out = _modes_v1(fam, kind)
+    out = {m: d + SUPP for m, d in out.items()}           # v1 modes never see the supplementary set
+    if not SUPP_ON:
+        return out
+    if kind == "log":
+        out["supp_full"] = []
+        if fam in ("F1", "F4"):
+            out["supp_minus_forged"] = LOG_FORGED + SUPP_LOG_FORGED
+        return out
+    f = FORGED.get(fam, [])
+    out["supp_full"] = TIMING
+    if fam in AF:
+        return out
+    out["supp_minus_forged"] = TIMING + f
+    if fam.startswith("T1-"):
+        out["supp_timing_minus_forged"] = list(f)
+    return out
+
+
+def _modes_v1(fam: str, kind: str) -> dict[str, list[str]]:
     if kind == "log":
         out = {"full": []}
         if fam in ("F1", "F4"):
@@ -285,7 +368,7 @@ def evaluate(data: pd.DataFrame, folds: int = 4) -> tuple[list[dict], list[dict]
                          "auc_min": round(float(np.min(aucs)), 4),
                          "auc_max": round(float(np.max(aucs)), 4),
                          "boot_lo": round(lo_ci, 4), "boot_hi": round(hi_ci, 4),
-                         "dropped": "|".join(drop)})
+                         "dropped": "|".join(c for c in drop if c not in SUPP)})
             if mode in ("full", "minus_forged"):
                 for t, g in df[ok].groupby("_target"):
                     yy, ss = g["_y"].to_numpy(), oof[ok][df[ok]["_target"].to_numpy() == t]
@@ -303,7 +386,7 @@ def verdicts(auc: pd.DataFrame) -> pd.DataFrame:
     for (fam, dose), _ in auc.groupby(["family", "dose"]):
         r = {"family": fam, "dose": dose, "declared": fam in DECLARED,
              "trigger_a": "", "trigger_b": "", "trigger_b_structure": "", "trigger_b_timing": "",
-             "a1_gate": ""}
+             "a1_gate": "", "trigger_b_supp": "", "trigger_b_supp_timing": "", "a1_gate_supp": ""}
         full = get(fam, dose, "full").iloc[0]
         if fam in UNDECLARED:
             r["trigger_a"] = bool(full.auc_mean >= 0.75 or full.boot_lo >= 0.70)
@@ -318,8 +401,18 @@ def verdicts(auc: pd.DataFrame) -> pd.DataFrame:
             tm = get(fam, dose, "timing_minus_forged")
             if fam.startswith("T1-") and len(tm):
                 r["trigger_b_timing"] = fp(tm.iloc[0])
+        if fam in DECLARED | UNDECLARED and fam != "A1":
+            sm = get(fam, dose, "supp_minus_forged")
+            if len(sm):
+                r["trigger_b_supp"] = fp(sm.iloc[0])
+            st = get(fam, dose, "supp_timing_minus_forged")
+            if len(st):
+                r["trigger_b_supp_timing"] = fp(st.iloc[0])
         if fam == "A1":
             r["a1_gate"] = bool(full.boot_lo > 0.55)
+            sf = get(fam, dose, "supp_full")
+            if len(sf):
+                r["a1_gate_supp"] = bool(sf.iloc[0].boot_lo > 0.55)
         out.append(r)
     return pd.DataFrame(out)
 
@@ -357,7 +450,8 @@ def main(argv: list[str] | None = None) -> int:
         "classifier": "sklearn HistGradientBoostingClassifier(max_iter=200), categoricals "
                       "factorised per family x dose", "forged_fields": FORGED,
         "log_forged": LOG_FORGED, "structure": STRUCT, "timing": TIMING,
-        "declared": sorted(DECLARED), "undeclared": sorted(UNDECLARED)}, indent=2))
+        "declared": sorted(DECLARED), "undeclared": sorted(UNDECLARED),
+        "supplementary": SUPP if SUPP_ON else None, "supp_log_forged": SUPP_LOG_FORGED}, indent=2))
     print(v.to_string(index=False))
     return 0
 
