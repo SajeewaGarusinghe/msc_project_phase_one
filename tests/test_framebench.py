@@ -150,6 +150,8 @@ def test_p2_t2_injected_rows_pass_the_contract_in_units_and_window(row):
     assert len(labels) == int(row["labels"])
     for lab in labels:
         LabelRecord(**lab)
+    if row["family"] in fb.HONEST:
+        return _honest_rows_are_the_genuine_ones(row, case_dir, labels)
     span_ids = {l["record_id"][5:] for l in labels if l["record_id"].startswith("span:")}
     if span_ids:
         t = pd.read_csv(case_dir / "traces.csv", low_memory=False, dtype={"spanID": str})
@@ -181,6 +183,26 @@ def test_p2_t2_injected_rows_pass_the_contract_in_units_and_window(row):
             assert not IMPERATIVE.search(str(r.message))           # P2-T7 on the real output
 
 
+def _honest_rows_are_the_genuine_ones(row: dict, case_dir: Path, labels: list[dict]) -> None:
+    """AF1/AF2 edit genuine rows over the whole file (no window rule): every labelled span now
+    names the target; AF1's written by the target, AF2's by B (sender). AF1's log labels are row
+    positions in a file that keeps the clean row order."""
+    assert all(not l["fabricated"] and l["factually_false"] and l["rule_applicable"] is False
+               for l in labels)
+    span_ids = {l["record_id"][5:] for l in labels if l["record_id"].startswith("span:")}
+    t = pd.read_csv(case_dir / "traces.csv", usecols=["spanID", "serviceName", "sender"],
+                    dtype={"spanID": str})
+    t = t[t.spanID.isin(span_ids) & (t.serviceName == row["target"])]
+    assert set(t.spanID) == span_ids
+    if row["family"] == "AF1":
+        assert (t.sender == row["target"]).all()
+        rows = [int(l["record_id"][4:]) for l in labels if l["record_id"].startswith("log:")]
+        lg = pd.read_csv(case_dir / "logs.csv", usecols=["container_name"])
+        assert (lg.container_name.iloc[rows] == fb.log_name(row["target"])).all()
+    else:
+        assert (t.sender == row["af2_b"]).all() and row["af2_b"] != row["target"]
+
+
 @real
 def test_p2_t3_the_target_is_never_the_root_cause_and_every_check_is_recorded():
     targets = list(csv.DictReader((SEALED / "targets.csv").open()))
@@ -202,8 +224,10 @@ def test_p2_t3_the_target_is_never_the_root_cause_and_every_check_is_recorded():
 @real
 @pytest.mark.skipif(not os.environ.get("PROVRCA_HARNESS_PYTHON"),
                     reason="P2-T4 rebuilds a variant and needs PROVRCA_HARNESS_PYTHON")
-@pytest.mark.parametrize("family,threat", [("FS", "T2"), ("F3c", "T2"), ("F3", "T1"), ("FSc", "T2")])
-def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path, family, threat):
+@pytest.mark.parametrize("family,threat,level", [("FS", "T2", "high"), ("F3c", "T2", "high"),
+                                                  ("F3", "T1", "high"), ("FSc", "T2", "high"),
+                                                  ("AF1", "T2", "minus"), ("AF2", "T2", "std")])
+def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path, family, threat, level):
     from provrca_bench.framebench.case import load_dev_cases
     from provrca_bench.framebench.target import draw_target
     dev = {json.loads(l)["source"].split("/")[0] for l in ANSWERS.read_text().splitlines()}
@@ -213,7 +237,7 @@ def test_p2_t4_two_builds_from_the_same_inputs_are_byte_identical(tmp_path, fami
     digests = []
     for k in range(2):
         out = tmp_path / f"b{k}"
-        res = fb.build_variant(case, target=target, family=family, threat=threat, dose_level="high",
+        res = fb.build_variant(case, target=target, family=family, threat=threat, dose_level=level,
                                seed=20261125, out_root=out / "cases", sealed_root=out / "sealed")
         files = sorted(p for p in res.out_dir.iterdir())
         sealed = sorted((out / "sealed" / case.case_id).iterdir())
@@ -239,6 +263,12 @@ def test_p2_t5_every_record_clean_and_injected_carries_a_sender(row):
         is_forged = t.spanID.isin(forged)
         assert (t.sender[is_forged] == "attacker-pod").all()
         assert (t.sender[~is_forged] == t.serviceName[~is_forged]).all()
+    elif row.get("family") == "AF2":   # a mislabelled replica: B's identity, D's name
+        relabelled = {json.loads(l)["record_id"][5:] for l in (SEALED / row["case_id"] / f"{row['variant']}.labels.jsonl")
+                      .read_text().splitlines()}
+        mis = t.spanID.isin(relabelled) & (t.serviceName == row["target"])
+        assert (t.sender[mis] == row["af2_b"]).all()
+        assert (t.sender[~mis] == t.serviceName[~mis]).all()
     else:
         assert (t.sender == t.serviceName).all()                               # T2: own identity
     lg = pd.read_csv(case_dir / "logs.csv", usecols=["container_name", "sender"])
