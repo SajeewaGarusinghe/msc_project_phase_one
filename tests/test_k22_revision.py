@@ -141,3 +141,29 @@ def test_t1_replays_whole_traces_well_nested_and_in_window(case_and_target, fami
     i = np.clip(np.searchsorted(g, firsts), 1, len(g) - 1)
     near = np.minimum(np.abs(g[i] - firsts), np.abs(g[i - 1] - firsts))
     assert (near <= adaptive.T1_JITTER_US).all()
+
+
+@real
+@pytest.mark.parametrize("case_id,family", [("re2-ob-0028", "F4"), ("re2-ob-0028", "F1")])
+def test_log_events_never_merge_with_each_other(case_id, family):
+    """Fix, 28 Nov: two F4-high events of different messages coincided in re2-ob-0028 (one
+    timestamp, two lines), so the label contract failed. Every inserted episode (lines <= 10 ms
+    apart) holds exactly one forged line, which ends it."""
+    dev = {json.loads(l)["source"].split("/")[0] for l in ANSWERS.read_text().splitlines()}
+    case = next(c for c in load_dev_cases(dataset_root=DATASET, tasks_root=TASKS,
+                                          answers_jsonl=ANSWERS, dev_templates=dev)
+                if c.case_id == case_id)
+    target = {r["case_id"]: r["service"] for r in csv.DictReader(TARGETS.open())
+              if r["drawn"] == "True"}[case_id]
+    logs = pd.read_csv(case.case_dir / "logs.csv", low_memory=False, keep_default_na=False)
+    dose = dose_for(case, target, "high")
+    v = fb.variant_name(family, "T2", "high", SEED)
+    rows = fb._log_inserts(case, logs, target, family, dose,
+                           np.random.default_rng(seed_for(case.case_id, v, target)))
+    rows = sorted(rows, key=lambda r: r["timestamp"])
+    ts = np.array([r["timestamp"] for r in rows], dtype=np.int64)
+    assert len(set(ts.tolist())) == len(ts)
+    grp = np.r_[0, np.cumsum(np.diff(ts) > fb.EPISODE_GAP_NS)]
+    for g in np.unique(grp):
+        ep = [r for r, k in zip(rows, grp) if k == g]
+        assert sum(not r["_witness"] for r in ep) == 1 and not ep[-1]["_witness"]

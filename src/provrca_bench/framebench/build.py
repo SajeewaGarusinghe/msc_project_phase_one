@@ -28,6 +28,7 @@ Labels carry ``rule_applicable`` (as delivered, derived from what the generator 
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import io
 import json
@@ -267,10 +268,17 @@ def _log_inserts(case: CleanCase, logs: pd.DataFrame, target: str, family: str, 
     placed: dict[str, list[int]] = {}       # message -> times already written
     event = tries = 0
 
+    ins: list[int] = []                     # F1/F4: every line written so far, sorted
+
     def free(t: int, span: int) -> bool:
-        # F1/F4: no genuine line within 10 ms of the element's whole extent; A1 keeps round 1's
-        # check (around the start only), so its variants regenerate byte for byte
-        k = np.searchsorted(ots, [t - EPISODE_GAP_NS, t + (span if forged else 0) + EPISODE_GAP_NS])
+        # F1/F4: no genuine line, and no line already written, within 10 ms of the element's whole
+        # extent (fix, 28 Nov: two events of different messages could coincide, re2-ob-0028 F4-high,
+        # merging into one episode); A1 keeps round 1's check (around the start only), so its
+        # variants regenerate byte for byte
+        a, b = t - EPISODE_GAP_NS, t + (span if forged else 0) + EPISODE_GAP_NS
+        k = np.searchsorted(ots, [a, b])
+        if forged and bisect.bisect_left(ins, a) != bisect.bisect_right(ins, b):
+            return False
         return lo_ns <= t and t + span < hi_ns and k[0] == k[1]
 
     def count() -> int:
@@ -338,6 +346,8 @@ def _log_inserts(case: CleanCase, logs: pd.DataFrame, target: str, family: str, 
                 rows[-1].update(time=_hhmm(ts), timestamp=ts, container_name=log_name(target),
                                 cluster_id="", log_template="")
                 placed.setdefault(rows[-1]["message"], []).append(ts)
+                if forged:
+                    bisect.insort(ins, ts)
         event += 1
     return rows
 
