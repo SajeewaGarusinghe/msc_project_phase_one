@@ -9,7 +9,10 @@ and passes four checks on the clean case:
       the G0 report fixed the rank reading. ``ALARM_TOP_K = 1`` is the cut the G0 report and
       proposal section 06 quote (3.39 eligible targets per case);
   (b) no rise in its server-span error rate;
-  (c) not an upstream caller of the root cause, since callers inherit symptoms;
+  (c) not an upstream caller of the root cause, since callers inherit symptoms -- **any ancestor**,
+      not only a direct caller (decisions log 28 Nov: every ancestor inherits symptoms; on the
+      development cases this changes nothing, on RE3-TT it removes 16 of 62 targets and empties no
+      case). The field keeps its name, ``c_not_upstream_caller``;
   (d) server spans after the fault and log lines, so an overlay has something to imitate.
 
 BARO's score is RCAEval's RobustScorer: fit on the pre-fault window, take the largest |z| after it,
@@ -91,7 +94,7 @@ def check_candidates(case: CleanCase) -> list[CandidateCheck]:
         err = lambda d: float((d.statusCode.fillna(0) != 0).mean()) if len(d) else 0.0
         a = rank.get(svc, 10**6) > ALARM_TOP_K
         b = not (err(post) > err(pre))
-        c = svc not in case.callers_of(root)
+        c = svc not in case.ancestors_of(root)
         d = len(post) > 0 and log_name(svc) in case.log_containers
         out.append(CandidateCheck(
             service=svc, shape=shape, baro_z=round(scores[svc], 3) if svc in scores else None,

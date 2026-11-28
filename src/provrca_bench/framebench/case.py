@@ -124,6 +124,16 @@ class CleanCase:
     def callees_of(self, svc: str) -> set[str]:
         return {b for a, b in self.edges if a == svc}
 
+    def ancestors_of(self, svc: str) -> set[str]:
+        """Every transitive caller of ``svc`` in ``edges`` (the graph check (c) reads)."""
+        out, stack = set(), list(self.callers_of(svc))
+        while stack:
+            u = stack.pop()
+            if u not in out:
+                out.add(u)
+                stack.extend(self.callers_of(u))
+        return out
+
     @cached_property
     def log_containers(self) -> set[str]:
         return set(pd.read_csv(self.case_dir / "logs.csv", usecols=["container_name"])

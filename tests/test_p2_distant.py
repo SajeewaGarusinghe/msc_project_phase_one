@@ -83,6 +83,21 @@ def test_a_grandchild_is_near_other_not_neighbour_and_not_distant(tmp_path):
     assert cls["emailservice"] == ("near_other", 2)
 
 
+def test_check_c_excludes_every_ancestor_not_only_direct_callers(tmp_path, monkeypatch):
+    """Decisions log 28 Nov: an ancestor two calls up inherits the root cause's symptoms as a
+    direct caller does. frontend -> checkout -> email: for root email, checkout is a direct caller
+    and frontend an ancestor; both fail (c). payment (a sibling) passes it."""
+    case = _boutique(tmp_path, "emailservice")
+    assert case.ancestors_of("emailservice") == {"checkoutservice", "frontendservice"}
+    import provrca_bench.framebench.target as tg
+    monkeypatch.setattr(tg, "baro_scores", lambda case: {})      # (a) and (d) need metrics/logs
+    case.__dict__["log_containers"] = set()
+    c = {x.service: x for x in check_candidates(case)}
+    assert not c["checkoutservice"].c_not_upstream_caller
+    assert not c["frontendservice"].c_not_upstream_caller
+    assert c["paymentservice"].c_not_upstream_caller
+
+
 def test_the_subset_is_seeded_rounded_up_and_empty_without_eligible_cases():
     ids = [f"c{i}" for i in range(15)]
     s = distant_subset(ids, 7)
@@ -120,4 +135,5 @@ def test_the_main_target_rule_is_unchanged(dev_cases):
     for case in dev_cases:
         for c in check_candidates(case):
             r = sealed[(case.case_id, c.service)]
-            assert (c.shape, str(c.eligible)) == (r["shape"], r["eligible"]), (case.case_id, c.service)
+            assert (c.shape, str(c.eligible), str(c.c_not_upstream_caller)) == \
+                (r["shape"], r["eligible"], r["c_not_upstream_caller"]), (case.case_id, c.service)
